@@ -1,0 +1,8 @@
+node_modules/
+.browsers/
+.chrome-home/
+.chrome-profile*/
+.npm-cache/
+.cache/
+test/shots/
+.xdg/

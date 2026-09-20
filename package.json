@@ -1,0 +1,14 @@
+{
+  "name": "whitesoft",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "WhiteSoft — a local whiteboard with PDF import and .note support",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node test/smoke.mjs"
+  },
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}
