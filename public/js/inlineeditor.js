@@ -9,6 +9,7 @@ import { Rect } from './geometry.js';
 import { T, fontString, LINE_HEIGHT } from './elements.js';
 import { argbToRgba } from './util.js';
 import { el } from './util.js';
+import { layoutRichText, ensureMathJax, hasMathSyntax } from './mathtext.js';
 
 const FONT_STACK = '"Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Source Han Sans SC",system-ui,sans-serif';
 
@@ -34,6 +35,9 @@ export class InlineEditor {
     const page = ed.page;
     this.current = target;
     this.before = JSON.parse(JSON.stringify(target));
+    // The canvas draws this element's raw source while it is being edited
+    // (instead of typeset math), so the cached raster has to be rebuilt.
+    ed.invalidate();
 
     if (target.type === T.TABLE) return this.#editTable(target, opts);
     return this.#editTextLike(target, opts);
@@ -61,6 +65,9 @@ export class InlineEditor {
     });
     ta.addEventListener('input', () => {
       target.text = ta.value;
+      // Start fetching MathJax as soon as LaTeX shows up, so the formulas are
+      // typeset the moment the editor closes.
+      if (hasMathSyntax(ta.value)) ensureMathJax().catch(() => {});
       ed.renderer.invalidate();
       ed.requestRender();
       this.#grow(wrap, ta, target);
@@ -234,6 +241,8 @@ export class InlineEditor {
     this._tableRebuild = null;
 
     const ed = this.editor;
+    // Repaint without the plain-source override, so TeX comes back.
+    ed.invalidate();
     const before = this.before;
     const after = JSON.parse(JSON.stringify(target));
     this.before = null;
@@ -259,9 +268,11 @@ export function fitTextBox(e) {
   const size = e.fontSize || 20;
   const c = fitTextBox._c || (fitTextBox._c = document.createElement('canvas').getContext('2d'));
   c.font = fontString(size, e);
-  const lines = String(e.text || '').split('\n');
+  // Math-aware: a `$…$` atom counts as one unbreakable box, so the fitted
+  // width has to come from the same layout the renderer uses.
+  const lines = layoutRichText(c, e.text || '', size, Infinity, e);
   let w = 0;
-  for (const line of lines) w = Math.max(w, c.measureText(line).width);
+  for (const line of lines) w = Math.max(w, line.w);
   if (e.text === '') w = size * 2;
   e.bounds = new Rect(b.x, b.y, Math.max(w + size * 0.4, size), Math.max(lines.length, 1) * size * LINE_HEIGHT).toString();
 }

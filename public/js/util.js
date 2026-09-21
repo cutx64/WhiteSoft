@@ -88,6 +88,12 @@ export function argbToHex(argb) {
   return '#' + (s.length === 8 ? s.slice(2) : s).toUpperCase();
 }
 
+/** Alpha channel (0-255) of an '#AARRGGBB' colour; '#RRGGBB' is opaque. */
+export function argbAlpha(argb) {
+  const s = String(argb == null ? '' : argb).replace('#', '');
+  return s.length === 8 ? parseInt(s.slice(0, 2), 16) : 255;
+}
+
 /** '#RRGGBB' + alpha -> '#AARRGGBB' */
 export function hexToArgb(hex, alpha = 255) {
   const h = hex.replace('#', '').padStart(6, '0');

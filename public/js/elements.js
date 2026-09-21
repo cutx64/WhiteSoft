@@ -128,8 +128,30 @@ export function makeText({ bounds, text, fontSize, textColor = '#FF000000', extr
   return { type: T.TEXT, text, textColor, fontSize, bounds: bounds.toString(), ...extra };
 }
 
-export function makeSticky({ bounds, text = '', color = PALETTE.note[0].argb, textColor = '#FF000000', fontSize = 18 }) {
-  return { type: T.STICKY, bounds: bounds.toString(), color, text, textColor, fontSize };
+export function makeSticky({
+  bounds, text = '', color = PALETTE.note[0].argb, textColor = '#FF000000',
+  fontSize = 18, radius = undefined,
+}) {
+  const e = { type: T.STICKY, bounds: bounds.toString(), color, text, textColor, fontSize };
+  if (radius != null) e.radius = radius;
+  return e;
+}
+
+/**
+ * Corner rounding of a sticky note, in world units.
+ *
+ * `radius` is stored per element as a ratio of the note's shorter side, so a
+ * note keeps its shape when it is resized.  Notes written by Microsoft
+ * Whiteboard carry no such field and fall back to `STICKY_RADIUS`; the field
+ * itself is a clone extension that Whiteboard simply ignores.
+ */
+export const STICKY_RADIUS = 0.12;
+export const MAX_STICKY_RADIUS = 0.5;
+
+export function stickyCornerRadius(e, w, h) {
+  const r = e && e.radius != null ? e.radius : STICKY_RADIUS;
+  const ratio = Math.min(Math.max(Number(r) || 0, 0), MAX_STICKY_RADIUS);
+  return ratio * Math.min(w, h);
 }
 
 export function makeTable({ bounds, rows = 4, cols = 4, cellW = 120, cellH = 44 }) {  return {

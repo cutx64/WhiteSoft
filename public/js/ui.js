@@ -7,7 +7,7 @@
  * whose right-hand side carries the zoom control and the page navigator with
  * its page-number box.
  */
-import { el, $, $$, argbToHex, hexToArgb, formatBytes, clamp, argbToRgba } from './util.js';
+import { el, $, $$, argbToHex, hexToArgb, argbAlpha, formatBytes, clamp, argbToRgba } from './util.js';
 import { SceneRenderer, renderOptions } from './render.js';
 import { SelectionBar } from './selectionbar.js';
 import { T, PALETTE, GRADIENT_PENS, REACTIONS } from './elements.js';
@@ -564,10 +564,13 @@ export class UI {
   swatches(colors, current, onPick, { alpha = 255, cols = 5 } = {}) {
     const grid = el('div', { class: 'wb-swatches' });
     grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+    // The palette only expresses a hue, so "current" is matched on RGB: a
+    // sticky note that has been made translucent still shows its colour here.
+    const curHex = current ? argbToHex(current).toUpperCase() : '';
     for (const c of colors) {
       const hex = argbToHex(c.argb);
       const b = el('button', {
-        class: 'wb-swatch' + (String(c.argb).toUpperCase() === String(current).toUpperCase() ? ' active' : ''),
+        class: 'wb-swatch' + (c.argb && argbToHex(c.argb).toUpperCase() === curHex ? ' active' : ''),
         title: c.name, type: 'button',
         style: { background: hex },
         onclick: () => {
@@ -581,11 +584,17 @@ export class UI {
     return grid;
   }
 
-  slider(label, value, min, max, step, onInput, format = (v) => String(Math.round(v))) {
+  /**
+   * Labelled range slider.  `onInput` fires continuously while dragging;
+   * `onCommit` fires once when the value settles (pointer release / keyboard),
+   * which is where an edit should be written to the undo history.
+   */
+  slider(label, value, min, max, step, onInput, format = (v) => String(Math.round(v)), onCommit = null) {
     const out = el('span', { class: 'wb-slider-value', text: format(value) });
     const input = el('input', {
       type: 'range', min: String(min), max: String(max), step: String(step), value: String(value),
       oninput: (e) => { const v = Number(e.target.value); out.textContent = format(v); onInput(v); },
+      onchange: () => { out.textContent = format(Number(input.value)); onCommit?.(); },
     });
     return el('div', { class: 'wb-sliderrow' },
       el('span', { class: 'wb-slider-label', text: label }), input, out);
@@ -809,21 +818,96 @@ export class UI {
       ),
       el('div', { class: 'wb-flyout-label', text: '对齐' }), alignRow,
       el('p', { class: 'wb-hint', text: '在画布上单击即可输入文字，支持中文输入法。' }),
+      el('p', { class: 'wb-hint', text: '支持 LaTeX：$x^2$ 行内公式，$$\\int_0^1 x\\,dx$$ 独立公式（MathJax 渲染）。' }),
     );
     this.openFlyout(anchor, content, { title: '文本' });
   }
 
   openStickyFlyout(anchor) {
+    this.openFlyout(anchor, this.#stickyStyleBody(), { title: '便签' });
+  }
+
+  /** The same panel, opened from the selection's action bar. */
+  openStickyStyleFlyout(anchor) {
+    this.openFlyout(anchor, this.#stickyStyleBody(), { title: '便签样式' });
+  }
+
+  /**
+   * Sticky-note appearance: colour, transparency and corner rounding.
+   *
+   * Everything here does double duty, like the text flyout does: the values
+   * become the defaults for the next note *and* are applied to the sticky
+   * notes that are selected right now.
+   */
+  #stickyStyleBody() {
     const ed = this.editor;
-    const content = el('div', { class: 'wb-flyout-body' },
+    // The targets are resolved on every change rather than captured here:
+    // undo replaces the element objects wholesale and re-points the selection,
+    // so a list taken when the panel opened would go stale.
+    const targets = () => [...ed.selection].filter((e) => e.type === T.STICKY);
+    const sample = targets()[0];
+    const curColor = sample ? sample.color : ed.noteStyle.color;
+    const curAlpha = Math.round((argbAlpha(curColor) / 255) * 100);
+    const curRadius = sample && sample.radius != null ? sample.radius : ed.noteStyle.radius;
+
+    /** One undo step per gesture: the snapshot is taken on the first change
+     *  of a drag and pushed when the slider settles. */
+    let pending = null;
+    const apply = (fn) => {
+      const list = targets();
+      if (!list.length) return;
+      const before = ed.snapshot();
+      for (const e of list) fn(e);
+      ed.commitSnapshot(before, '便签样式');
+    };
+    const applyLive = (fn) => {
+      const list = targets();
+      if (!list.length) return;
+      if (!pending || pending.elements !== ed.page.elements) {
+        pending = { snap: ed.snapshot(), elements: ed.page.elements };
+      }
+      for (const e of list) fn(e);
+      ed.invalidate();
+    };
+    const commitPending = () => {
+      if (!pending) return;
+      const { snap, elements } = pending;
+      pending = null;
+      // An undo in the middle of the gesture already replaced the page.
+      if (elements !== ed.page.elements) return;
+      ed.commitSnapshot(snap, '便签样式');
+    };
+
+    // The palette expresses a hue only: each note keeps the transparency it
+    // already had (the same rule the action bar's colour picker uses).
+    const colorRow = this.swatches(PALETTE.note, curColor, (color) => {
+      const hex = argbToHex(color);
+      ed.noteStyle.color = hexToArgb(hex, argbAlpha(ed.noteStyle.color));
+      apply((e) => { e.color = hexToArgb(hex, argbAlpha(e.color)); });
+    }, { cols: 6 });
+
+    return el('div', { class: 'wb-flyout-body' },
       el('div', { class: 'wb-flyout-label', text: '便签颜色' }),
-      this.swatches(PALETTE.note, ed.noteStyle.color, (c) => {
-        ed.noteStyle.color = c;
-        applyToSelectionUI(ed, (e) => { if (e.type === T.STICKY) e.color = c; });
-      }, { cols: 6 }),
-      el('p', { class: 'wb-hint', text: '在画布上单击放置便签，直接输入文字。' }),
+      colorRow,
+      el('div', { class: 'wb-flyout-label', text: '不透明度' }),
+      this.slider('透明度', curAlpha, 10, 100, 5, (v) => {
+        // Transparency lives in the ARGB alpha of the note's colour, so it
+        // travels with the file and Whiteboard understands it too.
+        const alpha = Math.round((v / 100) * 255);
+        ed.noteStyle.color = hexToArgb(argbToHex(ed.noteStyle.color), alpha);
+        applyLive((e) => { e.color = hexToArgb(argbToHex(e.color), alpha); });
+      }, (v) => `${Math.round(v)}%`, commitPending),
+      el('div', { class: 'wb-flyout-label', text: '圆角' }),
+      this.slider('圆角', Math.round(curRadius * 100), 0, 50, 1, (v) => {
+        const r = v / 100;
+        ed.noteStyle.radius = r;
+        applyLive((e) => { e.radius = r; });
+      }, (v) => `${Math.round(v)}%`, commitPending),
+      el('p', { class: 'wb-hint', text: sample
+        ? `修改所选 ${targets().length} 张便签；同样的样式也会用于新建的便签。`
+        : '在画布上单击放置便签，直接输入文字。' }),
+      el('p', { class: 'wb-hint', text: '支持 LaTeX：$E=mc^2$，独立公式写成 $$…$$（MathJax 渲染）。' }),
     );
-    this.openFlyout(anchor, content, { title: '便签' });
   }
 
   openReactionFlyout(anchor) {
@@ -1118,6 +1202,7 @@ export class UI {
       ['Ctrl + + / Ctrl + −', '放大 / 缩小'],
       ['Page Up / Page Down', '上一页 / 下一页'],
       ['Ctrl + Alt + N / Ctrl + Alt + P', '在当前页之后 / 之前新建画纸'],
+      ['Ctrl + Shift + P', '显示 / 隐藏页面面板'],
       ['Ctrl + S / Ctrl + Shift + S', '保存 .note / 另存为新 .note'],
       ['Ctrl + Shift + I', '导入 PDF'],
       ['双击文本 / 便签 / 表格', '编辑内容'],

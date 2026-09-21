@@ -13,6 +13,8 @@ Canvas 应用，由本机一个**零运行时依赖**的 Node 进程提供服务
 - **打开 / 保存 `.note`** —— 直接读取 Microsoft Whiteboard 本地版保存的 `.note` 压缩包，
   把每张画纸上的墨迹、荧光笔、直线、矩形、椭圆、箭头、折线、图片、文本以及 PDF 背景
   **按原始坐标忠实还原**；改完再存回 `.note`，得到的文件可以用 Microsoft Whiteboard 打开。
+- **文本与便签支持 LaTeX** —— 在文本框或便签里写 `$x^2$` / `$$\int_0^1 x\,dx$$`，
+  由内置的 **MathJax** 渲染成真正的数学排版（离线，无需联网）。
 - **保存是非破坏性的** —— `.note` → `.note` 只重写 `manifest.json` 与 `Pages/*.json`，
   源归档里的每一个条目都原样搬运（连当前没有任何画纸引用的图片也保留），
   350 MB 的白板存回也只要一两秒；先写临时文件再原子重命名，中途失败不会破坏原文件。
@@ -21,7 +23,8 @@ Canvas 应用，由本机一个**零运行时依赖**的 Node 进程提供服务
 > Windows app, served by a zero-dependency Node process on `127.0.0.1`. It imports PDFs
 > (one whiteboard page per PDF page) and reads/writes the local `.note` format with full
 > fidelity: ink, highlighters, shapes, images, text, tables, sticky notes and the PDF
-> backdrop, all in their original world coordinates. Saving is non-destructive — every
+> backdrop, all in their original world coordinates. Text boxes and sticky notes render
+> **LaTeX** (`$…$` / `$$…$$`) with a bundled MathJax. Saving is non-destructive — every
 > entry of the source archive is carried over verbatim.
 > Jump to [Quick start](#快速开始) · [`.note` format](#note-格式反向工程) · [Tests](#测试).
 
@@ -141,6 +144,39 @@ node server.mjs --port 8787 --host 127.0.0.1 --root ~/my-boards
 圆角矩形，以及虚线 / 直线 / 单箭头 / 双箭头，可填充）、文本框、便签（12 色）、表格、
 图片（插入 / 粘贴 / 缩放 / 旋转）、反应（8 个 emoji）。
 
+### 便签样式
+
+便签默认是**圆角**的，颜色、透明度、圆角大小都可以单独调整：
+
+- **颜色**：12 色便签色板；换颜色只改色相，**不会把便签的透明度改回不透明**。
+- **透明度**：10% – 100%。透明度写在便签颜色的 `#AARRGGBB` alpha 通道里，
+  所以它会随 `.note` 一起保存，Microsoft Whiteboard 打开也认得。
+- **圆角**：0% – 50%（占便签短边的比例），0% 是直角、50% 接近胶囊形；
+  缩放便签时圆角按比例跟着变。
+- 打开方式：工具栏的**便签**工具，或选中便签后点操作栏的**便签样式**按钮
+  （选中多张便签时一次改全部）。面板里的设置同时会成为**新建便签**的默认样式。
+- 便签的投影只画在便签**外侧一圈**，不会透过半透明的纸面把便签压暗。
+
+### LaTeX 公式（MathJax）
+
+文本框和便签里可以直接写 LaTeX，画布上渲染成真正的数学排版：
+
+| 写法 | 效果 |
+|---|---|
+| `$x^2+y^2$` | 行内公式，与中英文混排 |
+| `\(x^2\)` | 同上（TeX 写法）|
+| `$$…$$` / `\[…\]` | 独立公式，自动独占一行 |
+| `\$9.99` | 转义，按字面量显示 `$9.99` |
+
+- 渲染交给**内置的 MathJax**（`public/vendor/mathjax/`，离线可用，不请求 CDN）。
+- 公式会先排版成 SVG，再栅格化进渲染缓存：**平移、缩放、页面缩略图都不会重新排版**，
+  位图按 2 的幂分档缓存；导出 PNG / PDF 时按导出分辨率重新栅格化。
+- 编辑时由 DOM 编辑器**独占绘制**文字（输入 `$` 的瞬间就开始加载 MathJax），
+  画布不再叠画一份，所以不会出现重影；关闭编辑器后立刻变回公式。
+  便签编辑时保留纸面、表格编辑时保留网格，只有文字交给编辑器。
+- 语法写错不会崩：MathJax 会画出红色的错误提示，原文始终保存在元素里。
+- 普通文本里的 `$` 不会被误判：`价格 $5 与 $6` 仍是纯文本。
+
 ### 选择与编辑
 
 套索选择、矩形框选、点选、`Shift` 加选、八向缩放手柄、旋转手柄、层序调整、锁定/解锁、
@@ -159,13 +195,18 @@ node server.mjs --port 8787 --host 127.0.0.1 --root ~/my-boards
 
 ### 所选操作栏
 
-选中任何对象后，选区**下方**浮出一条操作栏：改变颜色、复制到上一页 / 下一页 /
+选中任何对象后，选区**下方**浮出一条操作栏：编辑、便签样式、改变颜色、复制到上一页 / 下一页 /
 指定页码、复制、再制、删除、置于顶层 / 底层 / 移到图层最底层。拖动时会自动隐藏，
 不会挡住手势；误关之后可以点工具栏的「操作栏」按钮恢复。
+操作栏会**按所选内容增减按钮**（只选文本框时没有便签样式，只选形状时两个都没有）。
 
+- **编辑**：只框选/选中**一个文本框或一张便签**时出现，点一下直接进入文字编辑，
+  不用再双击；编辑期间操作栏自动隐藏。
+- **便签样式**：所选里只要有便签就出现，一次调整其中**所有**便签的圆角 / 颜色 / 不透明度；
+  一次拖动只记**一步撤销**。
 - **复制到任意页**：把选中的对象按原坐标复制到目标画纸，原页保留；可撤销。
 - **改变颜色**：按所选内容自动切换色板（便签用便签色板、文本用文字色板、荧光笔用高亮色板，
-  其余用笔的色板）；图片和反应不可改色，会给出提示。
+  其余用笔的色板）；便签只换色相、保留自身透明度，图片和反应不可改色，会给出提示。
 - **移到图层最底层**：解决图片盖住批注的问题。
 
 ### 删除
@@ -233,6 +274,7 @@ node server.mjs --port 8787 --host 127.0.0.1 --root ~/my-boards
 | `空格+拖动` / 中键拖动 | 平移画布 |
 | `PageUp` / `PageDown` | 上一页 / 下一页 |
 | `Ctrl+Alt+N` / `Ctrl+Alt+P` | 在当前页之后 / 之前新建空白画纸 |
+| `Ctrl+Shift+P` | 显示 / 隐藏页面面板 |
 | `Ctrl+S` / `Ctrl+Shift+S` | 保存 `.note` / 另存为新 `.note` |
 | `Ctrl+O` / `Ctrl+Shift+I` | 打开 `.note` / 导入 PDF |
 | `Enter` / 双击 | 编辑所选（或指针下）的文本、便签、表格 |
@@ -319,6 +361,8 @@ Resources/Document/<name>.pdf     导入的 PDF 原件
 
 另外 `locked` / `rounded` / `inkGradient` / `arrow` / `textAlign` / `underline` / `headerRow`
 等是可选扩展字段：保存后依然是合法 JSON，读回时原样保留。
+便签还多一个 `radius`（圆角占短边的比例）——便签的透明度则写在 `color` 的 `#AARRGGBB`
+alpha 通道里，不额外占字段。
 
 ---
 
@@ -339,6 +383,7 @@ public/
 │   ├── tools.js            各种工具 + 形状构造 + 墨迹转形状
 │   ├── render.js           Canvas 渲染器（世界坐标缓存 + 路径缓存）
 │   ├── elements.js         元素模型 + 调色板 + 命中测试 + 几何变换
+│   ├── mathtext.js         LaTeX：分隔符解析、MathJax 排版、位图缓存、富文本排版
 │   ├── selectionbar.js     所选操作栏
 │   ├── document.js         文档模型 + .note 读写 + PDF 导入排版
 │   ├── pdfmanager.js       pdf.js 封装（分页位图缓存、CJK CMap）
@@ -349,6 +394,7 @@ public/
 │   └── util.js             杂项
 └── vendor/
     ├── pdfjs/              pdf.js 4.10.38 + cmaps（中文 PDF 必需）+ standard_fonts
+    ├── mathjax/            MathJax 3.2.2（TeX → SVG），文本框 / 便签的公式渲染
     └── fflate/             Zip 导出用的压缩库
 test/                       端到端测试（Puppeteer 驱动真实 Chromium），见下一节
 ```
@@ -383,6 +429,11 @@ node test/round3.mjs              # 46 项：撤销/删除后立即重绘（画�
 node test/round4.mjs              # 28 项：第一次框选只选择不移动、数字键 1–0、Shift+N 新建白板、
                                   #        Ctrl+Alt+N/P 前后插入画纸、所选操作栏、图片等比缩放、移到图层最底层
 node test/strokes.mjs             # 9 项：笔迹连续性 —— 沿每条墨迹中线逐像素采样，要求 100% 命中
+node test/sticky.mjs              # 22 项：便签圆角 / 颜色 / 透明度、操作栏按所选内容增减按钮、
+                                  #        「编辑」按钮直接进入编辑、一步撤销、像素级外观验证
+node test/math.mjs                # 34 项：LaTeX —— 分隔符解析、MathJax 排版与栅格化、公式驱动排版、
+                                  #        独立公式独占行、坏公式、缓存与重绘、导出含公式、
+                                  #        编辑态不重影（文本框 / 便签 / 表格）、以及"选工具→点击→打字→提交"的真实交互
 node test/perf.mjs                # 帧率基准（可加 --dpr 2 / --index <页码>）
 node test/smoke.mjs               # 冒烟测试 + 截图（--note <文件> --page <n> --headed）
 node test/visual.mjs              # 单页视觉比对（同时用 pdftoppm 输出参考图）：--note --index --zoom
@@ -391,13 +442,14 @@ node test/inline.mjs              # 内联编辑器（文本 / 便签 / 表格�
 node test/final.mjs               # 脏标记：干净加载不显示、编辑后显示
 ```
 
-`e2e` / `round2` / `round3` / `round4` / `strokes` 结束时打印
+`e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` 结束时打印
 `===== N/N 通过 =====`，有失败项时以非零码退出。
 
 > **注意**：`e2e.mjs`、`round2.mjs`、`round3.mjs` 里有针对两个私有样例白板的硬编码断言
 > （446 页 / 655 页、第 265 页 1751 个元素、第 168 页的 14 条直尺高亮等），
 > 仓库里**不含**这两个文件。要复现请把它们放到工作区根目录（或按自己的白板改断言）；
-> `smoke.mjs` / `visual.mjs` 可以用 `--note <你的文件>` 直接跑。
+> `math.mjs` / `sticky.mjs` / `strokes.mjs` / `smoke.mjs` / `visual.mjs` 自带内容或支持
+> `--note <你的文件>`，不需要样例白板。
 
 本仓库最近一次全量运行（Linux、无头 Chromium 153、软件渲染）：
 
@@ -408,6 +460,8 @@ node test/final.mjs               # 脏标记：干净加载不显示、编辑�
 | `test/round3.mjs` | **46 / 46 通过** |
 | `test/round4.mjs` | **28 / 28 通过** |
 | `test/strokes.mjs` | **9 / 9 通过** |
+| `test/math.mjs` | **34 / 34 通过** |
+| `test/sticky.mjs` | **22 / 22 通过** |
 
 ---
 
@@ -457,6 +511,9 @@ node test/final.mjs               # 脏标记：干净加载不显示、编辑�
 - **渲染与模型分离**：`elements.js` 只描述数据与几何，`render.js` 负责把世界坐标画出来，
   `editor.js` 管状态与指针事件，`ui.js` 管 DOM —— 所以测试可以既走真实指针事件，
   也可以直接操作模型来构造极端场景。
+- **公式是"图片"，不是 DOM**：`mathtext.js` 用 MathJax 同步排版出 SVG，再栅格化成位图交给
+  渲染器，因此公式和墨迹、图片走同一条缓存路径，MathJax 只在第一次出现 `$…$` 时才加载，
+  没写公式的白板完全不会付出这份开销。
 - **变宽缎带与端点半圆必须分成两个路径填充**：圆弧永远顺时针，合并进同一个 `Path2D`
   会与缎带的反向环绕相消，在笔迹上打出空洞 —— `test/strokes.mjs` 就是为这条规则写的回归测试。
 
@@ -476,6 +533,9 @@ node test/final.mjs               # 脏标记：干净加载不显示、编辑�
 - 荧光笔的半圆端点来自本克隆的渲染规则（直线高亮一律圆头），新画的高亮会写一个
   `cap: "round"` 标记；原版文件没有这个字段，Microsoft Whiteboard 打开时忽略它、
   按平头显示，其余部分不受影响。
+- **LaTeX 是本克隆的扩展**：公式以 `$…$` 源码存在元素的 `text` 字段里，
+  Microsoft Whiteboard 打开时会原样显示成 LaTeX 源码（不会渲染成公式），
+  在本应用里则始终渲染为公式。表格单元格目前不支持公式，只有文本框和便签支持。
 - **缩放比例不写进 `.note`**：它只在本次会话内全局生效，重新打开白板会回到默认 80%。
   文件里的 `page.scale` 保留原版语义（版式因子 = 页面世界宽度 / 1440）。
 
@@ -485,6 +545,8 @@ node test/final.mjs               # 脏标记：干净加载不显示、编辑�
 
 - [pdf.js](https://github.com/mozilla/pdf.js) 4.10.38（Apache-2.0，Mozilla Foundation）——
   `public/vendor/pdfjs/`，含 CJK `cmaps` 与 `standard_fonts`，用于把 PDF 页渲染成位图。
+- [MathJax](https://github.com/mathjax/MathJax) 3.2.2（Apache-2.0，MathJax Consortium）——
+  `public/vendor/mathjax/`（`tex-svg` 组件 + LICENSE），把文本框 / 便签里的 TeX 排版成 SVG。
 - [fflate](https://github.com/101arrowz/fflate)（MIT）—— `public/vendor/fflate/`，
   导出 `Zip(HTML + JSON)` 时在浏览器里打包。
 

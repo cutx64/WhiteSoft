@@ -9,8 +9,9 @@ import { Rect, rectFromPoints, distToSegment } from './geometry.js';
 import { argbToRgba, clamp } from './util.js';
 import {
   T, POLYGON_SHAPES, IS_OBJECT, elementPoints, localBounds,
-  fontString, wrapText, LINE_HEIGHT, ellipsePointsFromRect,
+  fontString, wrapText, LINE_HEIGHT, ellipsePointsFromRect, stickyCornerRadius,
 } from './elements.js';
+import { layoutRichText, drawRichLine } from './mathtext.js';
 
 const HIGHLIGHTER_MIN_WIDTH = 6;
 
@@ -347,51 +348,82 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawSticky(ctx, e) {
+function drawSticky(ctx, e, env) {
   const b = Rect.parse(e.bounds);
+  // Rounded corners: the radius is a ratio of the shorter side, so a note
+  // keeps its shape when it is resized (see stickyCornerRadius in elements.js).
+  const r = stickyCornerRadius(e, b.w, b.h);
+  const shape = new Path2D();
+  roundRectPath(shape, b.x, b.y, b.w, b.h, r);
+
+  // Drop shadow, painted only in the ring around the note.  A shadow cast under
+  // the note itself would show through a translucent paper and darken it.
+  const halo = Math.max(14, r + 8);
+  const ring = new Path2D();
+  roundRectPath(ring, b.x - halo, b.y - halo, b.w + halo * 2, b.h + halo * 2, r + halo);
+  roundRectPath(ring, b.x, b.y, b.w, b.h, r);
   ctx.save();
-  ctx.shadowColor = 'rgba(0,0,0,0.18)';
-  ctx.shadowBlur = 6;
-  ctx.shadowOffsetY = 2;
-  ctx.fillStyle = argbToRgba(e.color || '#FFFFF275');
-  roundRectPath(ctx, b.x, b.y, b.w, b.h, Math.min(6, b.w / 12, b.h / 12));
-  ctx.fill();
+  ctx.clip(ring, 'evenodd');
+  ctx.shadowColor = 'rgba(0,0,0,0.20)';
+  ctx.shadowBlur = 10;
+  ctx.shadowOffsetY = 4;
+  ctx.fillStyle = 'rgba(0,0,0,0.20)';
+  ctx.fill(shape); // clipped out inside the note; only the blurred spill lands
   ctx.restore();
+
+  ctx.fillStyle = argbToRgba(e.color || '#FFFFF275');
+  ctx.fill(shape);
 
   const pad = Math.min(10, b.w * 0.08);
   const size = e.fontSize || 18;
-  const lines = wrapText(e.text || '', size, Math.max(b.w - pad * 2, 4), e);
+  // The sticky keeps its paper while it is edited (the textarea is
+  // transparent), but its text belongs to the DOM editor then.
+  if (env?.editing === e) return;
   ctx.fillStyle = argbToRgba(e.textColor || '#FF000000');
   ctx.font = fontString(size, e);
-  ctx.textBaseline = 'top';
-  ctx.textAlign = e.textAlign || 'left';
-  const tx = e.textAlign === 'center' ? b.cx : e.textAlign === 'right' ? b.right - pad : b.x + pad;
+  const lines = layoutRichText(ctx, e.text || '', size, Math.max(b.w - pad * 2, 4), e, textScale(env));
+  const align = e.textAlign || 'left';
   let y = b.y + pad;
   const maxY = b.bottom - pad + size * 0.35;
   for (const line of lines) {
     if (y > maxY) break;
-    ctx.fillText(line, tx, y);
+    drawRichLine(ctx, line, alignX(align, b.x + pad, b.cx, b.right - pad, line.w), y, size, e);
     y += size * LINE_HEIGHT;
   }
 }
 
-function drawTextObject(ctx, e) {
+function drawTextObject(ctx, e, env) {
+  // While this element is open in the DOM inline editor, the textarea is the
+  // only thing that may draw its text: painting it here as well shows a
+  // slightly offset second copy (ghosting), because DOM and canvas text are
+  // rasterised differently and the box only re-fits when the editor closes.
+  if (env?.editing === e) return;
   const b = Rect.parse(e.bounds);
   const size = e.fontSize || 20;
   ctx.fillStyle = argbToRgba(e.textColor || '#FF000000');
   ctx.font = fontString(size, e);
-  ctx.textBaseline = 'top';
-  ctx.textAlign = e.textAlign || 'left';
-  const lines = wrapText(e.text || '', size, Math.max(b.w, 4), e);
-  const tx = e.textAlign === 'center' ? b.cx : e.textAlign === 'right' ? b.right : b.x;
+  const lines = layoutRichText(ctx, e.text || '', size, Math.max(b.w, 4), e, textScale(env));
+  const align = e.textAlign || 'left';
   let y = b.y;
   for (const line of lines) {
-    ctx.fillText(line, tx, y);
+    drawRichLine(ctx, line, alignX(align, b.x, b.cx, b.right, line.w), y, size, e);
     y += size * LINE_HEIGHT;
   }
 }
 
-function drawTable(ctx, e) {
+/** Left edge of a line given the element's alignment. */
+function alignX(align, left, center, right, lineW) {
+  if (align === 'center') return center - lineW / 2;
+  if (align === 'right') return right - lineW;
+  return left;
+}
+
+/** Device pixels per world unit, for deciding how sharply to rasterise math. */
+function textScale(env) {
+  return (env && env.scale) || (env ? env.zoom * (env.dpr || 1) : 1);
+}
+
+function drawTable(ctx, e, env) {
   const b = Rect.parse(e.bounds);
   const colW = e.colWidths || [];
   const rowH = e.rowHeights || [];
@@ -423,7 +455,9 @@ function drawTable(ctx, e) {
         ctx.fillRect(colX[c], rowY[r], w, h);
       }
       ctx.strokeRect(colX[c], rowY[r], w, h);
-      const txt = (e.cells?.[r]?.[c]) || '';
+      // Cell text is drawn by the DOM contenteditable cells while the table is
+      // being edited; drawing it here too would ghost underneath them.
+      const txt = env?.editing === e ? '' : ((e.cells?.[r]?.[c]) || '');
       if (txt) {
         const size = e.fontSize || 16;
         ctx.fillStyle = argbToRgba(e.textColor || '#FF000000');
@@ -494,7 +528,7 @@ export function drawElement(ctx, e, env) {
       break;
     }
     case T.IMAGE: drawImageElement(ctx, e, env.images); break;
-    case T.TEXT: drawTextObject(ctx, e); break;
+    case T.TEXT: drawTextObject(ctx, e, env); break;
     case T.REACTION: {
       const b = Rect.parse(e.bounds);
       ctx.font = `${b.h}px "Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif`;
@@ -508,14 +542,14 @@ export function drawElement(ctx, e, env) {
         const b = Rect.parse(e.bounds);
         ctx.translate(b.cx, b.cy); ctx.rotate(e.rotation); ctx.translate(-b.cx, -b.cy);
       }
-      drawSticky(ctx, e);
+      drawSticky(ctx, e, env);
       break;
     case T.TABLE:
       if (e.rotation) {
         const b = Rect.parse(e.bounds);
         ctx.translate(b.cx, b.cy); ctx.rotate(e.rotation); ctx.translate(-b.cx, -b.cy);
       }
-      drawTable(ctx, e);
+      drawTable(ctx, e, env);
       break;
     default:
       drawShape(ctx, e, env);
@@ -653,7 +687,7 @@ export class SceneRenderer {
 
     // 2. live layer + overlays in world space
     ctx.setTransform(k, 0, 0, k, -camera.x * k, -camera.y * k);
-    const env = { images: s.images, zoom: camera.zoom, dpr };
+    const env = { images: s.images, zoom: camera.zoom, dpr, scale: k, editing: s.editing || null };
     if (s.live) drawElement(ctx, s.live, env);
     if (s.overlay) { ctx.save(); s.overlay(ctx, env); ctx.restore(); }
 
@@ -744,7 +778,13 @@ export class SceneRenderer {
     }
 
     // elements
-    const env = { images: s.images, zoom: s.camera.zoom, dpr, pathCache: this.pathCache };
+    const env = {
+      images: s.images, zoom: s.camera.zoom, dpr, pathCache: this.pathCache,
+      // `scale` is world units -> device pixels of this raster, which is what
+      // decides how sharply math bitmaps are rasterised; `editing` lets a text
+      // box under the inline editor draw its raw source instead of TeX.
+      scale: usedScale, editing: s.editing || null,
+    };
     for (const e of s.page.elements) drawElement(c, e, env);
 
     this.cacheValid = true;

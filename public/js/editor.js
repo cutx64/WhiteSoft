@@ -2,10 +2,11 @@
  * Editor — application state, camera, input dispatch and element operations.
  */
 import { Rect, rotatePoint, rectFromPoints, boundsOfRotatedRect, handlePositions, rotateHandlePosition } from './geometry.js';
-import { clamp, clone, uid, argbToRgba } from './util.js';
+import { clamp, clone, uid, argbToRgba, argbToHex, hexToArgb, argbAlpha } from './util.js';
 import {
   T, elementBounds, localBounds, elementCenter, translateElement, scaleElement,
   rotateElement, hitTest, intersectsRect, insideLasso, IS_OBJECT, elementPoints,
+  STICKY_RADIUS,
 } from './elements.js';
 import { SceneRenderer, screenToWorld, worldToScreen } from './render.js';
 import { History } from './history.js';
@@ -13,6 +14,7 @@ import { ResourceStore } from './resources.js';
 import { PdfManager } from './pdfmanager.js';
 import { createDocument, createPage } from './document.js';
 import { TOOLS } from './tools.js';
+import { setRasterHandler } from './mathtext.js';
 
 export const MIN_ZOOM = 0.05;
 export const MAX_ZOOM = 32;
@@ -27,6 +29,10 @@ export class Editor {
     this.resources = new ResourceStore();
     this.pdf = new PdfManager();
     this.history = new History();
+    // LaTeX bitmaps arrive asynchronously (MathJax typesets synchronously, the
+    // SVG decode does not), so a late one must repaint the cached layer — the
+    // same path a late image takes.
+    setRasterHandler(() => this.#scheduleSoftInvalidate());
     // Any undo/redo (or a new entry) must repaint straight away: the history
     // closures mutate the page directly, so nothing else would invalidate the
     // render cache and the change would only appear on the next interaction.
@@ -55,7 +61,7 @@ export class Editor {
     this.highlighter = { color: '#5AFED42F', width: 24, opacity: 1, straight: false };
     this.eraserSize = 12;
     this.textStyle = { fontSize: 20, color: '#FF000000', bold: false, italic: false, underline: false, align: 'left' };
-    this.noteStyle = { color: '#FFFFE6A0', fontSize: 18, color2: '#FF000000' };
+    this.noteStyle = { color: '#FFFFE6A0', fontSize: 18, color2: '#FF000000', radius: STICKY_RADIUS };
     this.shapeStyle = { stroke: '#FF1F1F1F', width: 1.6, dash: false, filled: false, rounded: false };
     this.reactionEmoji = '⭐';
     this.toolbarLocation = 'bottom';
@@ -134,24 +140,30 @@ export class Editor {
   loadPageResources() {
     // Several images can land in the same frame; coalesce them into a single
     // cache rebuild instead of one per image.
-    const scheduleInvalidate = () => {
-      if (this._resInvalidateScheduled) return;
-      this._resInvalidateScheduled = true;
-      requestAnimationFrame(() => {
-        this._resInvalidateScheduled = false;
-        this.version++;
-        // Soft invalidation: if the user is mid-gesture the placeholder simply
-        // stays a moment longer instead of stalling the interaction.
-        this.renderer.markStale();
-        this.requestRender();
-      });
-    };
+    const scheduleInvalidate = () => this.#scheduleSoftInvalidate();
     if (this.resources.onLoad == null) this.resources.onLoad = scheduleInvalidate;
     const page = this.page;
     if (!page || !page.elements) return;
     const missing = page.elements.some((e) => e.type === T.IMAGE && e.fileName && !this.resources.has(e.fileName));
     if (!missing) return;
     this.resources.loadForPage(page).then(scheduleInvalidate).catch(() => {});
+  }
+
+  /**
+   * Coalesced soft invalidation for content that arrives asynchronously
+   * (image bitmaps, MathJax rasters, sharper PDF pages).  Bumping `version`
+   * makes the renderer treat the cached raster as stale, but the rebuild is
+   * deferred while the user is mid-gesture so interactions never stall.
+   */
+  #scheduleSoftInvalidate() {
+    if (this._resInvalidateScheduled) return;
+    this._resInvalidateScheduled = true;
+    requestAnimationFrame(() => {
+      this._resInvalidateScheduled = false;
+      this.version++;
+      this.renderer.markStale();
+      this.requestRender();
+    });
   }
 
   requestRender() {
@@ -181,6 +193,9 @@ export class Editor {
       // instead of rebuilding it, and rebuilds once everything settles.
       interacting: this.mode !== 'idle' || (performance.now() - (this._lastCameraChange || 0) < 120),
       live: this.live,
+      // The element currently open in the DOM inline editor draws its raw text
+      // on the canvas (the transparent textarea sits right on top of it).
+      editing: this.inline?.current || null,
       overlay: (ctx, env) => {
         this.currentTool?.overlay?.(this, ctx, env);
         this.overlayExtra?.(ctx, env);
@@ -534,7 +549,8 @@ export class Editor {
           n++;
           break;
         case T.STICKY:
-          e.color = argb;
+          // The palette picks a hue; the note keeps its own transparency.
+          e.color = hexToArgb(argbToHex(argb), argbAlpha(e.color));
           n++;
           break;
         case T.TABLE:

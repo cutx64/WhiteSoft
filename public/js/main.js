@@ -104,8 +104,13 @@ class App {
         case 'o': e.preventDefault(); this.showOpenDialog(); return;
         case 'i': if (e.shiftKey) { e.preventDefault(); this.pickPdf(); } return;
         case 'n': if (e.altKey) { e.preventDefault(); ed.addPageAfter(); this.ui.syncPages(); } return;
-        case 'p': if (e.altKey) { e.preventDefault(); ed.addPageBefore(); this.ui.syncPages(); } return;
-        case 'p': if (e.shiftKey) { e.preventDefault(); this.ui.togglePages(); } return;
+        case 'p':
+          // Ctrl+Alt+P inserts a page before the current one; Ctrl+Shift+P toggles
+          // the pages panel.  Both live under the same key, so they must share a
+          // single case — a second `case 'p'` would be unreachable.
+          if (e.altKey) { e.preventDefault(); ed.addPageBefore(); this.ui.syncPages(); return; }
+          if (e.shiftKey) { e.preventDefault(); this.ui.togglePages(); }
+          return;
         case '0': e.preventDefault(); e.shiftKey ? ed.fitPage() : ed.fitPageWidth(); return;
         case '[': if (e.shiftKey) { e.preventDefault(); ed.reorderSelection('back'); } return;
         case ']': if (e.shiftKey) { e.preventDefault(); ed.reorderSelection('front'); } return;

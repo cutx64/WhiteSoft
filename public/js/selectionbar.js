@@ -1,8 +1,9 @@
 /**
  * Floating action bar for the current selection.
  *
- * Appears just above the selection's bounding box and carries the operations
- * that are useful once something is selected: recolouring, copying the
+ * Appears just below the selection's bounding box and carries the operations
+ * that are useful once something is selected: opening a single text box or
+ * sticky for editing, restyling sticky notes, recolouring, copying the
  * selection onto another page, clipboard actions and z-order.
  */
 import { el, $, $$, argbToHex, argbToRgba, clamp } from './util.js';
@@ -22,6 +23,8 @@ const ICON = {
   scissors: '<circle cx="6" cy="6" r="2.4"/><circle cx="6" cy="18" r="2.4"/><path d="M20 4L8.6 15.4M20 20L8.6 8.6"/>',
   lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
+  edit: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M15 6l3 3"/>',
+  style: '<rect x="3.5" y="4.5" width="17" height="15" rx="4"/><path d="M7.5 10h9M7.5 14h5"/>',
 };
 
 const svg = (d, size = 16) =>
@@ -46,12 +49,37 @@ export class SelectionBar {
     // gesture, and while text is being edited inline.
     const busy = ed.mode !== 'idle';
     if (!rect || this.hidden || busy || ed.inline?.isEditing) { this.remove(); return; }
-    if (!this.node) this.build();
+    // The bar's contents depend on what is selected (a single text box can be
+    // opened for editing, sticky notes can be restyled), so rebuild it only
+    // when that shape changes.
+    const shape = this.shape();
+    if (!this.node || this.shapeKey !== shape) {
+      this.shapeKey = shape;
+      this.build();
+    }
     this.position(rect);
+  }
+
+  /** Identity of the current selection as far as the bar's buttons are concerned. */
+  shape() {
+    const sel = [...this.editor.selection];
+    const single = sel.length === 1 ? sel[0].type : 0;
+    const sticky = sel.filter((e) => e.type === T.STICKY).length;
+    return `${sel.length}|${single}|${sticky}`;
   }
 
   build() {
     const ed = this.editor;
+    const sel = [...ed.selection];
+    const only = sel.length === 1 ? sel[0] : null;
+    const editable = only && (only.type === T.TEXT || only.type === T.STICKY) ? only : null;
+    const stickies = sel.filter((e) => e.type === T.STICKY);
+
+    // Rebuilding detaches the buttons a popover/flyout may be anchored to.
+    if (this.node && this.ui.flyoutAnchor && this.node.contains(this.ui.flyoutAnchor)) this.ui.closeFlyout();
+    this.closePopover();
+    this.node?.remove();
+
     const b = (icon, title, fn, cls = '') => el('button', {
       class: `wb-selbtn ${cls}`, type: 'button', title,
       html: svg(ICON[icon]),
@@ -60,7 +88,14 @@ export class SelectionBar {
     });
 
     this.node = el('div', { class: 'wb-selbar' },
+      // Editing a single text box / sticky straight from the bar saves the
+      // double click that would otherwise be needed.
+      editable ? b('edit', only.type === T.STICKY ? '编辑便签文字' : '编辑文字',
+        () => ed.editElement(only, { selectAll: false })) : null,
+      editable ? el('div', { class: 'wb-selbar-sep' }) : null,
       b('color', '改变颜色', (btn) => this.openColorPicker(btn)),
+      stickies.length ? b('style', `便签样式（圆角 / 颜色 / 透明度）—— 已选 ${stickies.length} 张`,
+        (btn) => this.ui.openStickyStyleFlyout(btn)) : null,
       el('div', { class: 'wb-selbar-sep' }),
       b('prev', '复制到上一页', () => this.copyTo(-1)),
       b('next', '复制到下一页', () => this.copyTo(1)),
@@ -87,6 +122,7 @@ export class SelectionBar {
     this.closePopover();
     this.node?.remove();
     this.node = null;
+    this.shapeKey = null;
   }
 
   position(rect) {
@@ -173,7 +209,8 @@ export class SelectionBar {
     grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
     for (const c of colors) {
       grid.append(el('button', {
-        class: 'wb-swatch' + (String(c.argb).toUpperCase() === String(cur).toUpperCase() ? ' active' : ''),
+        // Compare on RGB: a translucent sticky still shows its hue as active.
+        class: 'wb-swatch' + (cur && argbToHex(c.argb).toUpperCase() === argbToHex(cur).toUpperCase() ? ' active' : ''),
         type: 'button', title: c.name, style: { background: argbToHex(c.argb) },
         onclick: () => {
           const n = ed.applySelectionColor(c.argb);

@@ -355,6 +355,7 @@ export const stickyTool = {
       color: ed.noteStyle.color,
       textColor: ed.noteStyle.color2,
       fontSize: ed.noteStyle.fontSize / ed.camera.zoom,
+      radius: ed.noteStyle.radius,
     });
     ed.addElement(e, { select: true, label: '添加便签' });
     ed.editElement?.(e, { selectAll: false });
