@@ -8,6 +8,7 @@
  *   Resources/Document/<name>.pdf       the imported PDF, if any
  */
 import { uuid } from './util.js';
+import { ZipReader } from './zipread.js';
 
 export const NOTE_VERSION = '1.0.0';
 export const DEFAULT_SCREEN_W = 2880;
@@ -109,6 +110,40 @@ async function api(url, opts) {
 export async function listWorkspaceFiles() {
   const res = await api('/api/files');
   return (await res.json()).files;
+}
+
+/**
+ * Open a `.note` that lives on the user's own disk.
+ *
+ * Nothing is uploaded: the archive is read in the browser (see zipread.js),
+ * pages are parsed here, and the images stay where they are — the document
+ * keeps the reader so the renderer can pull an entry only when it draws it.
+ * Saving such a board writes a new file into the workspace (用「另存为」),
+ * which is why `path` stays null.
+ */
+export async function openLocalNote(file, { onProgress } = {}) {
+  const zip = await ZipReader.open(file);
+  onProgress?.('读取清单…');
+  const manifest = (await zip.json('manifest.json')) || {};
+  const order = (manifest.pages || []).map((p) => p.fileName).filter(Boolean);
+  const names = order.length
+    ? order.map((n) => (n.startsWith('Pages/') ? n : 'Pages/' + n))
+    : zip.list().filter((n) => /^Pages\/.*\.json$/.test(n)).sort(naturalPageOrder);
+  const pages = [];
+  for (let i = 0; i < names.length; i++) {
+    const raw = await zip.json(names[i]);
+    pages.push(normalizePage(raw || { elements: [] }));
+    if (i % 8 === 0 || i === names.length - 1) onProgress?.(`读取页面… ${i + 1}/${names.length}`);
+  }
+  const doc = documentFromManifest(manifest, pages);
+  doc.sourcePath = null;
+  doc.path = null;
+  doc.name = file.name.replace(/\.note$/i, '');
+  doc.entryCount = zip.list().length;
+  doc.archiveBytes = file.size;
+  doc.localArchive = zip;
+  doc.localFile = { name: file.name, size: file.size, lastModified: file.lastModified || 0 };
+  return doc;
 }
 
 export async function openNote(path, { onProgress } = {}) {

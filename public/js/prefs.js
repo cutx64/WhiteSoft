@@ -60,3 +60,62 @@ export function setPref(key, value) {
   write(all);
   return value;
 }
+
+/* ------------------------------------------------------------------ *
+ * Recently used files
+ * ------------------------------------------------------------------ */
+
+/** How many files the recent list keeps. */
+export const RECENT_LIMIT = 16;
+
+/** Files opened in this browser, most recent first. */
+export function recentFiles() {
+  const list = getPref('recentFiles', []);
+  // Workspace files are remembered by path, local ones by name (+ a file
+  // handle when the browser supports it), so both kinds count as usable.
+  return Array.isArray(list) ? list.filter((r) => r && (r.path || r.name)) : [];
+}
+
+/**
+ * Remember a file, newest first, without duplicates.
+ *
+ * A remembered file is a *location*, never a copy: workspace files by their
+ * relative path, local files by their browser file handle (or, when the
+ * browser has no such API, just enough to recognise them again).
+ */
+export function rememberFile(entry) {
+  if (!entry || (!entry.path && !entry.name)) return recentFiles();
+  const key = fileKey(entry);
+  const list = recentFiles().filter((r) => fileKey(r) !== key);
+  list.unshift({ at: Date.now(), kind: 'note', source: 'workspace', ...entry });
+  const trimmed = list.slice(0, RECENT_LIMIT);
+  setPref('recentFiles', trimmed);
+  return trimmed;
+}
+
+/** Identity of a remembered file (path when we have one, otherwise name+size). */
+export function fileKey(entry) {
+  if (!entry) return '';
+  if (entry.path) return 'path:' + entry.path;
+  return `local:${entry.name || ''}:${entry.size || 0}`;
+}
+
+/** Forget every remembered file. */
+export function clearRecentFiles() {
+  setPref('recentFiles', []);
+  return [];
+}
+
+/** "刚刚" / "5 分钟前" / "昨天" … for the recent list. */
+export function relativeTime(ts) {
+  const secs = Math.max(0, (Date.now() - Number(ts || 0)) / 1000);
+  if (secs < 60) return '刚刚';
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${mins} 分钟前`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} 小时前`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return '昨天';
+  if (days < 30) return `${days} 天前`;
+  return new Date(Number(ts)).toLocaleDateString();
+}

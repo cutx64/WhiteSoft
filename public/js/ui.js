@@ -1145,9 +1145,18 @@ export class UI {
   /* ---------------------------------------------------------------- *
    * Dialogs
    * ---------------------------------------------------------------- */
+  /**
+   * Show a modal dialog.  Only one is ever on screen: opening a second one
+   * (快捷方式连按两次、从「打开」跳到「最近使用」…) replaces the first instead of
+   * stacking modals on top of each other.
+   */
   dialog(title, body, { wide = false, actions = [] } = {}) {
+    this.closeDialog();
     const back = el('div', { class: 'wb-modal' });
-    const close = () => back.remove();
+    const close = () => {
+      back.remove();
+      if (this.dialogNode === back) this.dialogNode = null;
+    };
     const dlg = el('div', { class: 'wb-dialog' + (wide ? ' wide' : '') },
       el('div', { class: 'wb-dialog-head' }, el('h3', { text: title }), btn('close', '关闭', close, 'sm')),
       el('div', { class: 'wb-dialog-body' }, body),
@@ -1156,7 +1165,14 @@ export class UI {
     back.append(dlg);
     document.body.append(back);
     back.addEventListener('pointerdown', (e) => { if (e.target === back) close(); });
+    this.dialogNode = back;
     return { close, node: dlg };
+  }
+
+  /** Close whatever modal is open (no-op when there is none). */
+  closeDialog() {
+    this.dialogNode?.remove();
+    this.dialogNode = null;
   }
 
   openExportDialog() {

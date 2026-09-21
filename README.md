@@ -299,6 +299,10 @@ go run github.com/grindlemire/go-tui/cmd/tui@v0.22.1 generate ./...
 
 - **页面**：页面面板（实时缩略图、拖拽排序、复制、删除）、新建画纸、
   **右下角页码输入框跳转**、`PageUp/PageDown` 翻页。
+- **打开文件分两条路**：点「打开」（或 `Ctrl+O`）先选来源 —— **从本地文件选择**
+  （系统文件对话框，直接打开本机的 `.note` 或导入 `.pdf`）或 **最近使用的文件**
+  （这个浏览器打开过的文件 + 工作区里的白板，都按时间倒序，本地导入的带来源标记）。
+  从本地导入的文件会复制一份到工作区的 `.cache/`，所以也能在最近列表里再次打开。
 - **文件**：导入 PDF（n 页 → n 张画纸，版式为一屏宽，即在 100% 时正好铺满窗口宽度）、
   打开 `.note`、保存 / 另存为 `.note`、导出 PNG / PDF / Zip(HTML+JSON)、
   拖放 `.note` 或 `.pdf` 到窗口打开。
@@ -457,7 +461,7 @@ public/
 │   ├── render.js           Canvas 渲染器（世界坐标缓存 + 路径缓存）
 │   ├── elements.js         元素模型 + 调色板 + 命中测试 + 几何变换
 │   ├── mathtext.js         LaTeX：分隔符解析、MathJax 排版、位图缓存、富文本排版
-│   ├── prefs.js            机器级偏好（自动保存间隔）的读写
+│   ├── prefs.js            机器级偏好（自动保存间隔、最近使用的文件）
 │   ├── selectionbar.js     所选操作栏
 │   ├── document.js         文档模型 + .note 读写 + PDF 导入排版
 │   ├── pdfmanager.js       pdf.js 封装（分页位图缓存、CJK CMap）
@@ -496,7 +500,8 @@ Chrome 路径默认取 `.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chro
 ```bash
 node test/e2e.mjs                 # 53 项：两个样例白板的加载与还原、重页面渲染、全部绘图工具、直尺约束、
                                   #        选择变换与撤销、墨迹转形状、页面导航、.note 保存回读、PDF 导入与另存、PNG/Zip 导出
-node test/round2.mjs              # 32 项：打开对话框、表格单元格编辑、便签缩放手柄、复制粘贴与跨页粘贴、
+node test/round2.mjs              # 33 项：打开对话框（本地文件 / 最近使用两个分支）、表格单元格编辑、
+                                  #        便签缩放手柄、复制粘贴与跨页粘贴、
                                   #        滚轮/空格/中键平移、直尺移动旋转微调、四种背景、Alt+… 快捷键、三支笔槽、替代文本
 node test/round3.mjs              # 46 项：撤销/删除后立即重绘（画布指纹验证）、手形工具、荧光笔直线开关、
                                   #        半圆端点逐像素验证、批量删除、右键菜单、任意比例输入、未保存更改确认框
@@ -507,6 +512,10 @@ node test/sticky.mjs              # 22 项：便签圆角 / 颜色 / 透明度�
                                   #        「编辑」按钮直接进入编辑、一步撤销、像素级外观验证
 node test/autosave.mjs            # 18 项：自动保存 —— 设置项与持久化、定时真的写盘、
                                   #        无改动 / 无文件 / 正在输入时的行为
+node test/resources.mjs           # 18 项：图片资源生命周期 —— 粘贴→保存→切到别的白板→切回来仍能渲染、
+                                  #        不串档、与刷新整页结果一致；本地打开另存后图片仍在
+node test/openflow.mjs            # 20 项：打开流程 —— 本地文件 / 最近使用两个分支、本地打开不上传不留副本、
+                                  #        记录的是位置（句柄）而非副本、工作区倒序、去重、清空、重新选择
 node test/math.mjs                # 34 项：LaTeX —— 分隔符解析、MathJax 排版与栅格化、公式驱动排版、
                                   #        独立公式独占行、坏公式、缓存与重绘、导出含公式、
                                   #        编辑态不重影（文本框 / 便签 / 表格）、以及"选工具→点击→打字→提交"的真实交互
@@ -518,7 +527,7 @@ node test/inline.mjs              # 内联编辑器（文本 / 便签 / 表格�
 node test/final.mjs               # 脏标记：干净加载不显示、编辑后显示
 ```
 
-`e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` / `autosave` 结束时打印
+`e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` / `autosave` / `resources` / `openflow` 结束时打印
 `===== N/N 通过 =====`，有失败项时以非零码退出。
 
 Go 侧（桌面端）自带单元测试，`launcher` 那组会真的启一个 node 子进程并等它的健康检查：
@@ -533,7 +542,7 @@ cd desktop && go test ./...       # notes / launcher / tui 三个包
 > **注意**：`e2e.mjs`、`round2.mjs`、`round3.mjs` 里有针对两个私有样例白板的硬编码断言
 > （446 页 / 655 页、第 265 页 1751 个元素、第 168 页的 14 条直尺高亮等），
 > 仓库里**不含**这两个文件。要复现请把它们放到工作区根目录（或按自己的白板改断言）；
-> `math.mjs` / `sticky.mjs` / `autosave.mjs` / `strokes.mjs` / `smoke.mjs` / `visual.mjs` 自带内容或支持
+> `math.mjs` / `sticky.mjs` / `autosave.mjs` / `resources.mjs` / `openflow.mjs` / `strokes.mjs` / `smoke.mjs` / `visual.mjs` 自带内容或支持
 > `--note <你的文件>`，不需要样例白板。
 
 本仓库最近一次全量运行（Linux、无头 Chromium 153、软件渲染）：
@@ -541,13 +550,15 @@ cd desktop && go test ./...       # notes / launcher / tui 三个包
 | 套件 | 结果 |
 |---|---|
 | `test/e2e.mjs` | **53 / 53 通过** |
-| `test/round2.mjs` | **32 / 32 通过** |
+| `test/round2.mjs` | **33 / 33 通过** |
 | `test/round3.mjs` | **46 / 46 通过** |
 | `test/round4.mjs` | **28 / 28 通过** |
 | `test/strokes.mjs` | **9 / 9 通过** |
 | `test/math.mjs` | **34 / 34 通过** |
 | `test/sticky.mjs` | **22 / 22 通过** |
 | `test/autosave.mjs` | **18 / 18 通过** |
+| `test/resources.mjs` | **18 / 18 通过** |
+| `test/openflow.mjs` | **20 / 20 通过** |
 | `desktop` `go test ./...` | **全部通过**（notes / launcher / tui）|
 
 ---

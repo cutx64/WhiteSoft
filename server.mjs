@@ -36,7 +36,10 @@ const PORT = Number(arg('port', process.env.PORT || 8787));
 const HOST = arg('host', '127.0.0.1');
 const WORKSPACE = path.resolve(arg('root', path.resolve(__dirname, '..')));
 const PUBLIC_DIR = path.join(__dirname, 'public');
-const CACHE_DIR = path.join(__dirname, '.cache');
+// Uploads (a .note picked from disk, a PDF, an extracted resource) belong to
+// the workspace the user is working in — and must stay inside it, because
+// every later request goes through resolveInsideWorkspace().
+const CACHE_DIR = path.join(WORKSPACE, '.cache');
 
 /* ------------------------------------------------------------------ *
  * Minimal random-access ZIP reader
@@ -465,8 +468,14 @@ async function listWorkspaceFiles() {
         const ext = path.extname(it.name).toLowerCase();
         if (ext === '.note' || ext === '.pdf' || ext === '.whiteboard') {
           let size = 0;
-          try { size = (await fsp.stat(abs)).size; } catch {}
-          out.push({ path: path.relative(WORKSPACE, abs), abs, name: it.name, ext, size });
+          let mtime = 0;
+          try {
+            const st = await fsp.stat(abs);
+            size = st.size;
+            mtime = st.mtimeMs;
+          } catch {}
+          // `mtime` lets the client list the workspace most-recent-first.
+          out.push({ path: path.relative(WORKSPACE, abs), abs, name: it.name, ext, size, mtime });
         }
       }
     }

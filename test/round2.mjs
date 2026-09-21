@@ -67,15 +67,25 @@ const C = (dx, dy) => [box.x + dx, box.y + dy];
  * 1. Open through the in-app dialog
  * ---------------------------------------------------------------- */
 console.log('\n[1] 通过“打开”对话框载入');
+// 「打开」现在先问来源：本机文件，还是最近使用 / 工作区里的文件。
 await page.evaluate(() => window.app.showOpenDialog());
-await sleep(800);
+await sleep(600);
+const choseRecent = await page.evaluate(() => {
+  const row = [...document.querySelectorAll('.wb-filerow')]
+    .find((r) => r.textContent.includes('最近使用的文件'));
+  if (!row) return false;
+  row.click();
+  return true;
+});
+check('打开对话框提供「最近使用的文件」分支', choseRecent === true, String(choseRecent));
+await sleep(900);
 const dialogOk = await page.evaluate(() => {
   const rows = [...document.querySelectorAll('.wb-filerow')];
   const target = rows.find((r) => r.textContent.includes('Al-jabr-2.note'));
   if (target) { target.click(); return true; }
   return rows.length;
 });
-check('打开对话框列出 .note 文件', dialogOk === true, String(dialogOk));
+check('最近使用 / 工作区列表里列出 .note 文件', dialogOk === true, String(dialogOk));
 await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
 await sleep(1500);
 const opened = await page.evaluate(() => ({

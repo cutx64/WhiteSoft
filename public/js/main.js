@@ -10,12 +10,18 @@ import { SceneRenderer } from './render.js';
 import { Rect } from './geometry.js';
 import { scaleElement, rotateElement } from './elements.js';
 import {
-  createDocument, createPage, openNote, saveNote, listWorkspaceFiles,
+  createDocument, createPage, openNote, openLocalNote, saveNote, listWorkspaceFiles,
   importPdfAsPages, referencedResources, manifestFromDocument, LAYOUT_WIDTH,
 } from './document.js';
 import { T } from './elements.js';
 import { beautifySelection } from './tools.js';
-import { getPref, setPref, autoSaveLabel } from './prefs.js';
+import {
+  getPref, setPref, autoSaveLabel, recentFiles, rememberFile, clearRecentFiles, relativeTime,
+} from './prefs.js';
+import { loadFflate } from './zipread.js';
+import {
+  handlesSupported, saveHandle, loadHandle, forgetHandle, forgetAllHandles, ensurePermission,
+} from './filehandles.js';
 
 class App {
   constructor() {
@@ -324,33 +330,188 @@ class App {
   /* ---------------------------------------------------------------- *
    * Open
    * ---------------------------------------------------------------- */
+  /* ---------------------------------------------------------------- *
+   * Opening files: local picker or the recent list
+   * ---------------------------------------------------------------- */
+
+  /** A file row: icon, name, an optional tag and a detail line. */
+  #fileRow({ icon, title, tag, desc, onclick }) {
+    return el('button', { class: 'wb-filerow', type: 'button', onclick },
+      el('span', { class: 'wb-fileicon', text: icon }),
+      el('span', { class: 'wb-filename' },
+        el('b', { text: title }),
+        tag ? el('span', { class: 'wb-filetag', text: tag }) : null,
+        desc ? el('div', { class: 'wb-pagedesc', text: desc }) : null,
+      ),
+    );
+  }
+
+  /** Ctrl+O / the 打开 button: pick a file from disk, or from recent files. */
   async showOpenDialog() {
-    let files = [];
-    try { files = await listWorkspaceFiles(); } catch { /* offline is fine */ }
-    const notes = files.filter((f) => f.ext === '.note' || f.ext === '.whiteboard');
-    const list = el('div', { class: 'wb-filelist' });
-    if (!notes.length) list.append(el('p', { class: 'wb-hint', text: '工作区中没有找到 .note 文件。' }));
-    for (const f of notes) {
-      list.append(el('button', {
-        class: 'wb-filerow', type: 'button',
-        onclick: () => { dlg.close(); this.loadNote(f.path); },
-      },
-        el('span', { class: 'wb-fileicon', text: '📝' }),
-        el('span', { class: 'wb-filename', text: f.path }),
-        el('span', { class: 'wb-filesize', text: formatBytes(f.size) }),
-      ));
-    }
-    const pathInput = el('input', { class: 'wb-input', placeholder: '或输入 .note 的绝对路径 / 相对路径' });
+    const pick = this.#fileRow({
+      icon: '📂',
+      title: '从本地文件选择',
+      desc: '用系统文件对话框打开本机的 .note 白板，或导入 .pdf',
+      onclick: () => { dlg.close(); this.pickLocalFile(); },
+    });
+    const recent = this.#fileRow({
+      icon: '🕘',
+      title: '最近使用的文件',
+      desc: '本浏览器打开过的文件，以及工作区里的白板',
+      onclick: () => { dlg.close(); this.showRecentDialog(); },
+    });
     const body = el('div', {},
-      el('p', { class: 'wb-hint', text: '选择一个白板文件。也可以直接把 .note 或 .pdf 拖到窗口里。' }),
-      list,
-      el('div', { class: 'wb-row' }, pathInput,
-        el('button', {
-          class: 'wb-primary', type: 'button', text: '打开',
-          onclick: () => { const v = pathInput.value.trim(); if (v) { dlg.close(); this.loadNote(v); } },
-        })),
+      el('p', { class: 'wb-hint', text: '从哪里打开？也可以直接把 .note 或 .pdf 拖到窗口里。' }),
+      el('div', { class: 'wb-filelist' }, pick, recent),
     );
     const dlg = this.ui.dialog('打开白板', body, { wide: true });
+  }
+
+  /**
+   * The "从本地文件选择" branch: a real OS file dialog.
+   *
+   * When the browser can hand out a file handle (Chrome/Edge) the pick is
+   * remembered as a link to that location, so it can be reopened later without
+   * asking again — and without ever copying the file.
+   */
+  async pickLocalFile({ pdfOnly = false } = {}) {
+    const accept = pdfOnly ? '.pdf,application/pdf' : '.note,.whiteboard,.pdf,application/pdf';
+    if (handlesSupported()) {
+      try {
+        const [handle] = await window.showOpenFilePicker({
+          multiple: false,
+          types: [{
+            description: pdfOnly ? 'PDF 文档' : 'WhiteSoft 白板 / PDF',
+            accept: pdfOnly ? { 'application/pdf': ['.pdf'] } : { 'application/x-note': ['.note', '.whiteboard'], 'application/pdf': ['.pdf'] },
+          }],
+        });
+        if (!handle) return;
+        const file = await handle.getFile();
+        const id = await saveHandle(`f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, handle);
+        if (/[.](pdf)$/i.test(file.name)) await this.importPdfFile(file, { handleId: id });
+        else await this.openLocalFile(file, { handleId: id });
+        return;
+      } catch (err) {
+        if (err?.name === 'AbortError') return;   // user cancelled the dialog
+        console.warn('showOpenFilePicker 不可用，回退到 input[type=file]', err);
+      }
+    }
+    const input = el('input', { type: 'file', accept });
+    input.onchange = () => {
+      const f = input.files?.[0];
+      input.remove();
+      if (!f) return;
+      if (pdfOnly || /[.](pdf)$/i.test(f.name)) this.importPdfFile(f);
+      else this.openLocalFile(f);
+    };
+    document.body.append(input);
+    input.click();
+  }
+
+  /**
+   * The "最近使用的文件" branch: what this browser opened before (newest
+   * first) plus the boards sitting in the workspace, most recently written
+   * first.
+   */
+  async showRecentDialog() {
+    let workspace = [];
+    try { workspace = await listWorkspaceFiles(); } catch { /* offline is fine */ }
+    const boards = workspace
+      .filter((f) => f.ext === '.note' || f.ext === '.whiteboard')
+      .sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
+
+    const remembered = recentFiles();
+    const seen = new Set(remembered.map((r) => r.path));
+    const rest = boards.filter((f) => !seen.has(f.path));
+
+    const recentList = el('div', { class: 'wb-filelist' });
+    if (!remembered.length) {
+      recentList.append(el('p', { class: 'wb-hint', text: '这个浏览器还没有打开过文件。' }));
+    }
+    for (const r of remembered) {
+      const local = r.source === 'local';
+      const where = r.path || (r.handleId ? '本地文件' : '本地文件');
+      recentList.append(this.#fileRow({
+        icon: r.kind === 'pdf' ? '📄' : '📝',
+        title: r.name || r.path,
+        tag: local ? '本地文件' : '工作区',
+        desc: [where, r.size ? formatBytes(r.size) : '', relativeTime(r.at)].filter(Boolean).join(' · '),
+        onclick: () => { dlg.close(); this.openRecent(r); },
+      }));
+    }
+
+    const workspaceList = el('div', { class: 'wb-filelist' });
+    if (!rest.length) {
+      workspaceList.append(el('p', { class: 'wb-hint', text: boards.length ? '工作区的白板都在上面的列表里了。' : '工作区中没有找到 .note 文件。' }));
+    }
+    for (const f of rest.slice(0, 12)) {
+      workspaceList.append(this.#fileRow({
+        icon: '📝',
+        title: f.path,
+        desc: [f.mtime ? relativeTime(f.mtime) : '', formatBytes(f.size)].filter(Boolean).join(' · '),
+        onclick: () => { dlg.close(); this.loadNote(f.path); },
+      }));
+    }
+
+    const body = el('div', {},
+      el('div', { class: 'wb-row' },
+        el('b', { text: '最近打开' }),
+        el('span', { class: 'wb-filesize', text: `${remembered.length} 个` }),
+        remembered.length ? el('button', {
+          class: 'wb-toggle', type: 'button', text: '清空记录',
+          onclick: (e) => {
+            clearRecentFiles();
+            forgetAllHandles();
+            e.currentTarget.disabled = true;
+            for (const row of [...recentList.children]) row.remove();
+            recentList.append(el('p', { class: 'wb-hint', text: '记录已清空。' }));
+          },
+        }) : null,
+      ),
+      recentList,
+      el('div', { class: 'wb-row' }, el('b', { text: '工作区文件' }),
+        el('span', { class: 'wb-filesize', text: '最近修改优先' })),
+      workspaceList,
+      el('p', {
+        class: 'wb-hint', text: '记录只保存文件的位置，不会复制文件：本地文件用浏览器授权的'
+          + '文件句柄记住（Chrome / Edge），再次打开时就地读取原文件；浏览器不支持时则需要重新选择一次。'
+          + '从本机打开的 .note 想留在工作区，请用「另存为」。'
+      }),
+    );
+    const dlg = this.ui.dialog('最近使用的文件', body, { wide: true });
+  }
+
+  /**
+   * Open a remembered file: a workspace path, or a local file through the
+   * handle stored for it.  Without a handle the browser gives us no way back
+   * to the file, so the user is asked to point at it again.
+   */
+  async openRecent(entry) {
+    if (entry.path) return this.loadNote(entry.path);
+    const handle = await loadHandle(entry.handleId);
+    if (!handle) {
+      this.ui.toast(`请重新选择 ${entry.name}（浏览器不会把本地文件路径交给网页）`, 'warn', 3600);
+      return this.pickLocalFile({ pdfOnly: entry.kind === 'pdf' });
+    }
+    try {
+      if (!(await ensurePermission(handle))) {
+        this.ui.toast('没有获得该文件的读取权限', 'warn');
+        return;
+      }
+      const file = await handle.getFile();
+      this.ui.progress('正在打开 ' + file.name + ' …');
+      if (entry.kind === 'pdf') await this.importPdfFile(file, { handleId: entry.handleId });
+      else await this.openLocalFile(file, { handleId: entry.handleId });
+      this.ui.progress('');
+    } catch (err) {
+      this.ui.progress('');
+      if (err?.name === 'NotFoundError') {
+        await forgetHandle(entry.handleId);
+        this.ui.toast(`${entry.name} 已被移动或删除，已从最近记录里移除`, 'error', 5000);
+        return;
+      }
+      this.ui.toast('打开失败：' + err.message, 'error', 6000);
+    }
   }
 
   async loadNote(path, { silent = false, confirm = true } = {}) {
@@ -360,7 +521,7 @@ class App {
       ui.progress('正在打开 ' + path + ' …');
       const doc = await openNote(path, { onProgress: (m) => ui.progress(m) });
       const ed = this.editor;
-      ed.resources.setNote(path);
+      ed.resources.setNote(path);   // also drops any archive from a local file
       if (doc.document?.fileName) {
         ui.progress('正在载入 PDF 背景…');
         try {
@@ -373,13 +534,13 @@ class App {
         await ed.pdf.close();
       }
       ed.setDocument(doc);
-      ui.titleInput.value = doc.name;
-      this.markSaved();
-      ui.syncStatus();
-      ui.pagesPanel.classList.add('hidden');
-      ui.progress('');
-      ui.toast(`已打开 ${doc.name}（${doc.pages.length} 张画纸${doc.document ? '，含 PDF 背景' : ''}）`, 'ok');
-      if (!silent) ui.closeFlyout();
+      this.#afterOpen(doc, {
+        path,
+        name: doc.name,
+        kind: 'note',
+        source: path.startsWith('.cache/') ? 'local' : 'workspace',
+        size: doc.archiveBytes || 0,
+      }, { silent });
     } catch (err) {
       ui.progress('');
       ui.toast('打开失败：' + err.message, 'error', 6000);
@@ -387,38 +548,84 @@ class App {
     }
   }
 
-  async openLocalFile(file) {
+  /**
+   * Open a file the user picked from their own disk.
+   *
+   * Nothing is copied: a `.note` is read straight from the file (the document
+   * keeps the archive reader and pulls images from it as they are drawn), and
+   * the location is remembered through `handleId` so the recent list can open
+   * the very same file again.
+   */
+  async openLocalFile(file, { handleId = null } = {}) {
     const name = file.name.toLowerCase();
     if (!(await this.confirmDiscard('打开其他文件'))) return;
     if (name.endsWith('.note') || name.endsWith('.whiteboard')) {
+      const ui = this.ui;
+      const ed = this.editor;
       try {
-        this.ui.progress(`正在导入 ${file.name}（${formatBytes(file.size)}）…`);
-        const res = await fetch('/api/upload?name=' + encodeURIComponent(file.name), { method: 'POST', body: file });
-        const out = await res.json();
-        this.ui.progress('');
-        if (out.error) throw new Error(out.error);
-        // already confirmed above
-        await this.loadNote(out.path, { confirm: false });
+        ui.progress(`正在读取 ${file.name}（${formatBytes(file.size)}）…`);
+        const doc = await openLocalNote(file, { onProgress: (m) => ui.progress(m) });
+        ed.resources.setLocalArchive(doc.localArchive);
+        if (doc.document?.fileName) {
+          ui.progress('正在载入 PDF 背景…');
+          const bytes = await doc.localArchive.read('Resources/Document/' + doc.document.fileName);
+          if (bytes) {
+            doc._pdfBytes = bytes;
+            await ed.pdf.open(bytes, 'local:' + file.name);
+          } else {
+            await ed.pdf.close();
+          }
+        } else {
+          await ed.pdf.close();
+        }
+        ed.setDocument(doc);
+        this.#afterOpen(doc, {
+          kind: 'note',
+          source: 'local',
+          name: file.name,
+          size: file.size,
+          lastModified: file.lastModified || 0,
+          handleId,
+        });
       } catch (err) {
-        this.ui.progress('');
-        this.ui.toast('导入失败：' + err.message, 'error');
+        ui.progress('');
+        ui.toast('打开失败：' + err.message, 'error', 6000);
+        console.error(err);
       }
       return;
     }
-    if (name.endsWith('.pdf')) return this.importPdfFile(file);
+    if (name.endsWith('.pdf')) return this.importPdfFile(file, { handleId });
     this.ui.toast('不支持的文件类型', 'warn');
+  }
+
+  /** Shared tail of "a document has been opened": title, status, recent list. */
+  #afterOpen(doc, recent, { silent = false } = {}) {
+    const ui = this.ui;
+    ui.titleInput.value = doc.name;
+    this.markSaved();
+    ui.syncStatus();
+    ui.pagesPanel.classList.add('hidden');
+    ui.progress('');
+    if (recent) rememberFile(recent);
+    ui.toast(`已打开 ${doc.name}（${doc.pages.length} 张画纸${doc.document ? '，含 PDF 背景' : ''}）`, 'ok');
+    if (!silent) ui.closeFlyout();
   }
 
   /* ---------------------------------------------------------------- *
    * PDF import
    * ---------------------------------------------------------------- */
   pickPdf() {
-    const input = el('input', { type: 'file', accept: 'application/pdf' });
-    input.onchange = () => { if (input.files[0]) this.importPdfFile(input.files[0]); };
-    input.click();
+    return this.pickLocalFile({ pdfOnly: true });
   }
 
-  async importPdfFile(file) {
+  /**
+   * Import a PDF as one whiteboard page per PDF page.
+   *
+   * @param {File} file
+   * @param {{handleId?: string}} opts identifies the picked file's location so
+   *   the recent list can ask for it again (nothing is copied).
+   */
+  async importPdfFile(file, { handleId = null } = {}) {
     const ui = this.ui;
     const ed = this.editor;
     if (!(await this.confirmDiscard('导入 PDF'))) return;
@@ -447,6 +654,16 @@ class App {
       this.markModified();
       ui.syncStatus();
       ui.progress('');
+      // Remember *where* the PDF came from (a file handle when the browser
+      // supports them) instead of keeping a second copy of it.
+      rememberFile({
+        name: file.name,
+        kind: 'pdf',
+        source: 'local',
+        size: file.size || 0,
+        lastModified: file.lastModified || 0,
+        handleId,
+      });
       ui.toast(`已导入 ${doc.pages.length} 页 PDF，每页对应一张画纸`, 'ok');
     } catch (err) {
       ui.progress('');
@@ -479,7 +696,19 @@ class App {
       if (doc._pdfBytes && doc.document?.fileName) {
         newFiles['Resources/Document/' + doc.document.fileName] = bytesToBase64(doc._pdfBytes);
       }
+      // A board opened from local disk keeps its pictures inside that file, so
+      // the first save into the workspace has to carry them across.  (Boards
+      // opened from the workspace are handled server-side: `keepAll` copies
+      // every entry of the source archive verbatim.)
+      if (doc.localArchive && doc._localSavedTo !== doc.path) {
+        for (const name of referencedResources(doc)) {
+          if (newFiles[name]) continue;
+          const bytes = await doc.localArchive.read(name);
+          if (bytes) newFiles[name] = bytesToBase64(bytes);
+        }
+      }
       const out = await saveNote(doc, { target: doc.path, newFiles });
+      if (doc.localArchive) doc._localSavedTo = out.target;
       this.markSaved();
       ui.progress('');
       ui.toast(auto
@@ -782,26 +1011,6 @@ class App {
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
-/**
- * fflate ships as a UMD bundle, which an ES-module import cannot see (it
- * assigns itself to `window.fflate` instead), so load it as a classic script.
- */
-let _fflate = null;
-async function loadFflate() {
-  if (_fflate) return _fflate;
-  if (!window.fflate) {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'vendor/fflate/fflate.min.js';
-      s.onload = resolve;
-      s.onerror = () => reject(new Error('无法加载 fflate'));
-      document.head.append(s);
-    });
-  }
-  _fflate = window.fflate;
-  return _fflate;
-}
-
 /** Shift+Alt+arrow resizes the selection along one axis, like Whiteboard. */
 function scaleSelection(ed, dx, dy) {
   const b = ed.selectionBounds();
