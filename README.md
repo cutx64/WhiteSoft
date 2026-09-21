@@ -15,6 +15,8 @@ Canvas 应用，由本机一个**零运行时依赖**的 Node 进程提供服务
   **按原始坐标忠实还原**；改完再存回 `.note`，得到的文件可以用 Microsoft Whiteboard 打开。
 - **文本与便签支持 LaTeX** —— 在文本框或便签里写 `$x^2$` / `$$\int_0^1 x\,dx$$`，
   由内置的 **MathJax** 渲染成真正的数学排版（离线，无需联网）。
+- **桌面端（Go）** —— `desktop/` 里是一个轻量 Go 程序：自动拉起同一个网页端并打开窗口，
+  还带一个 **go-tui 终端管理器**，可以在终端里浏览、检索、统计 `.note` 库（只读）。
 - **保存是非破坏性的** —— `.note` → `.note` 只重写 `manifest.json` 与 `Pages/*.json`，
   源归档里的每一个条目都原样搬运（连当前没有任何画纸引用的图片也保留），
   350 MB 的白板存回也只要一两秒；先写临时文件再原子重命名，中途失败不会破坏原文件。
@@ -25,7 +27,9 @@ Canvas 应用，由本机一个**零运行时依赖**的 Node 进程提供服务
 > fidelity: ink, highlighters, shapes, images, text, tables, sticky notes and the PDF
 > backdrop, all in their original world coordinates. Text boxes and sticky notes render
 > **LaTeX** (`$…$` / `$$…$$`) with a bundled MathJax. Saving is non-destructive — every
-> entry of the source archive is carried over verbatim.
+> entry of the source archive is carried over verbatim. A small Go program in `desktop/`
+> launches the same UI as a desktop app, and adds a go-tui terminal manager for browsing
+> a `.note` library.
 > Jump to [Quick start](#快速开始) · [`.note` format](#note-格式反向工程) · [Tests](#测试).
 
 ---
@@ -33,6 +37,7 @@ Canvas 应用，由本机一个**零运行时依赖**的 Node 进程提供服务
 ## 目录
 
 - [快速开始](#快速开始)
+- [桌面端（Go）](#桌面端go)
 - [功能](#功能)
 - [键盘快捷键](#键盘快捷键)
 - [`.note` 格式（反向工程）](#note-格式反向工程)
@@ -112,6 +117,65 @@ node server.mjs --port 8787 --host 127.0.0.1 --root ~/my-boards
 3. `Ctrl+S` 保存为 `.note`，得到的文件可以直接用 Microsoft Whiteboard 打开。
 
 > 仓库里**不包含** `.note` 样例文件（它们是个人笔记）。想立刻看效果，导入一份自己的 PDF 即可。
+
+---
+
+## 桌面端（Go）
+
+`desktop/` 是一个轻量的 Go 程序，给同一个网页端套上桌面体验：它**不重写白板**，只负责
+找到 `server.mjs`、挑一个空闲端口、等它就绪，然后打开窗口，退出时把子进程一起收走；
+另外还带一个 **go-tui 终端管理器**，用来浏览和检索 `.note` 库。
+
+```bash
+cd desktop
+go build -o whitesoft .          # 需要 Go 1.24+（运行时需要 Node.js 18+）
+./whitesoft                      # 桌面端：启动服务 + 打开浏览器
+./whitesoft --root ~/my-boards   # 指定工作区
+./whitesoft --port 9000          # 指定端口（默认自动挑一个空闲端口）
+./whitesoft --no-open            # 只启动服务，不打开浏览器
+./whitesoft tui                  # 终端管理器
+```
+
+| 选项 | 说明 |
+|---|---|
+| `--root <dir>` | 工作区目录（默认 = `server.mjs` 所在仓库的上一级）|
+| `--port <n>` | 端口（默认 **8787**，与 `whitesoft.sh` 一致；被占用时自动顺延并提示。指定后严格使用该端口）|
+| `--host <addr>` | 监听地址，默认 `127.0.0.1` |
+| `--server <path>` | 手动指定 `server.mjs`（默认从可执行文件所在目录向上查找）|
+| `--node <path>` | 手动指定 node 可执行文件 |
+| `--no-open` | 只启动服务，不打开浏览器 |
+
+启动流程：检查 Node ≥ 18 → 定位 `server.mjs` → 选端口 → 启动并轮询 `/api/health`
+→ 打开默认浏览器 → `Ctrl+C` 时连同子进程一起退出。服务端日志直接透传到终端。
+
+**端口策略三处一致**：`./whitesoft.sh`、`node server.mjs` 和 `desktop/whitesoft` 都默认
+**8787**，所以地址可以直接收藏；要换端口就在各自命令后面加 `--port <n>`
+（脚本还支持 `PORT=9000 ./whitesoft.sh`，以及端口被占时自动顺延的 `--auto-port`）。
+
+> 想做成原生窗口（而不是浏览器标签页）需要 CGO + `libwebkit2gtk`，本仓库没有引入这个依赖；
+> 桌面端默认走系统浏览器，界面、快捷键、功能与网页端完全一致。
+
+### 终端管理器（`whitesoft tui`）
+
+用 [go-tui](https://go-tui.dev/) 写的终端界面，**只读**地查看白板库：
+
+- 左栏列出工作区里的 `.note`：页数、图片数、是否内嵌 PDF、文件大小；
+- 选中后按 `enter` 在后台解析页面（带进度），右栏列出每页的元素 / 墨迹点 / 图片统计；
+- 选中画纸会显示它的文字与 LaTeX 源码预览（`a` 展开全部文字）；
+- `/` 既过滤白板名，也按**内容**过滤画纸；`s` 启停 `server.mjs`，`o` 切到网页端编辑。
+
+按键：`j/k`（或 `↑↓`）移动 · `tab` 切换栏位 · `enter` 载入 / 打开 · `o` 浏览器打开 ·
+`s` 启停服务 · `/` 搜索 · `a` 展开文字 · `r` 重新扫描 · `q` 退出。
+
+> 终端里无法绘图（TUI 没有画布），所以管理器负责浏览、检索与统计，编辑仍在网页端完成。
+> Go 侧对 `.note` **永远只读**；写入依旧只经过 `server.mjs`，非破坏性保存逻辑只有一份实现。
+
+`internal/tui/manager.gsx` 是 go-tui 的模板，`manager_gsx.go` 是它生成的代码（已提交，
+普通 `go build` 不需要 `tui` CLI）。改过 `.gsx` 后重新生成：
+
+```bash
+go run github.com/grindlemire/go-tui/cmd/tui@v0.22.1 generate ./...
+```
 
 ---
 
@@ -372,6 +436,11 @@ alpha 通道里，不额外占字段。
 whitesoft.sh                启动脚本（检查 Node 版本 / 端口 / 工作区，打印地址后 exec 服务端）
 server.mjs                  零依赖 HTTP 服务：静态资源 + ZIP 随机读 + .note 保存 + PDF 上传
 package.json                运行时无依赖，只有测试用的 puppeteer-core
+desktop/                    Go 桌面端 + go-tui 终端管理器（见「桌面端（Go）」一节）
+├── main.go                 命令行入口：默认桌面模式，tui 子命令进终端管理器
+├── internal/notes/         只读解析 .note（ZIP + manifest + Pages/*.json）
+├── internal/launcher/      找 node / 挑空闲端口 / 起子进程 / 等健康检查 / 开浏览器
+└── internal/tui/           go-tui 终端管理器（manager.gsx + 生成的 manager_gsx.go）
 public/
 ├── index.html
 ├── favicon.ico
@@ -445,6 +514,15 @@ node test/final.mjs               # 脏标记：干净加载不显示、编辑�
 `e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` 结束时打印
 `===== N/N 通过 =====`，有失败项时以非零码退出。
 
+Go 侧（桌面端）自带单元测试，`launcher` 那组会真的启一个 node 子进程并等它的健康检查：
+
+```bash
+cd desktop && go test ./...       # notes / launcher / tui 三个包
+```
+
+> 上面 7 个网页套件也整体跑在**由 Go 桌面端拉起的服务**上验证过一遍（`./whitesoft --root <白板目录> --port 8792`），
+> 也就是说 `desktop/` 只是换了启动方式，API 与前端行为完全一致。
+
 > **注意**：`e2e.mjs`、`round2.mjs`、`round3.mjs` 里有针对两个私有样例白板的硬编码断言
 > （446 页 / 655 页、第 265 页 1751 个元素、第 168 页的 14 条直尺高亮等），
 > 仓库里**不含**这两个文件。要复现请把它们放到工作区根目录（或按自己的白板改断言）；
@@ -462,6 +540,7 @@ node test/final.mjs               # 脏标记：干净加载不显示、编辑�
 | `test/strokes.mjs` | **9 / 9 通过** |
 | `test/math.mjs` | **34 / 34 通过** |
 | `test/sticky.mjs` | **22 / 22 通过** |
+| `desktop` `go test ./...` | **全部通过**（notes / launcher / tui）|
 
 ---
 

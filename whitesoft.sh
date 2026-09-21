@@ -4,12 +4,12 @@
 #
 #   ./whitesoft.sh                 在 127.0.0.1:8787 启动，并提示界面地址
 #   ./whitesoft.sh --open          启动后自动打开浏览器
-#   ./whitesoft.sh --port 9000     指定端口
+#   ./whitesoft.sh --port 9000     指定端口（默认就是 8787）
 #   ./whitesoft.sh --auto-port     端口被占用时自动往后找一个空闲端口
 #   ./whitesoft.sh --root ~/notes  指定工作区目录（存放 .note / .pdf）
 #
-# 脚本就放在 app/ 里，可以从任意工作目录调用：
-#   /path/to/whiteboard/app/whitesoft.sh
+# 脚本就在仓库根目录，可以从任意工作目录调用：
+#   /path/to/WhiteSoft/whitesoft.sh
 #
 # 其余无法识别的参数会原样传给 node server.mjs。
 #
@@ -17,7 +17,7 @@ set -euo pipefail
 
 APP_NAME="WhiteSoft"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# 本脚本位于 app/ 内，服务端就在同一个目录
+# 服务端与脚本同在仓库根目录
 APP_DIR="$HERE"
 SERVER="$APP_DIR/server.mjs"
 
@@ -36,7 +36,7 @@ usage() {
 选项：
   -p, --port <n>     监听端口（默认 8787，也可用环境变量 PORT）
   -H, --host <addr>  监听地址（默认 127.0.0.1）
-  -r, --root <dir>   工作区目录（默认 app/ 的上一级目录）
+  -r, --root <dir>   工作区目录（默认本仓库的上一级目录）
       --open         启动后自动打开默认浏览器
       --auto-port    端口被占用时自动顺延到下一个空闲端口
   -h, --help         显示本帮助
@@ -67,7 +67,7 @@ node -e 'const m=+process.versions.node.split(".")[0]; process.exit(m>=18?0:1)' 
   || die "Node.js 版本过低（当前 $(node -v)），需要 18 或更高。"
 [ -f "$SERVER" ] || die "找不到服务端文件：$SERVER"
 
-# 默认工作区是 app/ 的上一级，也就是存放 .note / .pdf 的目录
+# 默认工作区是仓库的上一级，也就是存放 .note / .pdf 的目录
 if [ -z "$ROOT" ]; then ROOT="$(cd "$APP_DIR/.." && pwd)"; fi
 [ -d "$ROOT" ] || die "工作区目录不存在：$ROOT"
 ROOT="$(cd "$ROOT" && pwd)"
