@@ -65,6 +65,9 @@ export class InlineEditor {
     });
     ta.addEventListener('input', () => {
       target.text = ta.value;
+      // Typing is a content change like any other: mark the board dirty so the
+      // save state (and the auto-save timer) sees it before the editor closes.
+      ed.onContentChange?.();
       // Start fetching MathJax as soon as LaTeX shows up, so the formulas are
       // typeset the moment the editor closes.
       if (hasMathSyntax(ta.value)) ensureMathJax().catch(() => {});
@@ -190,6 +193,7 @@ export class InlineEditor {
           cell.addEventListener('input', () => {
             if (!target.cells[r]) target.cells[r] = [];
             target.cells[r][c] = cell.textContent;
+            ed.onContentChange?.(); // see the text editor above
             ed.renderer.invalidate();
             ed.requestRender();
           });

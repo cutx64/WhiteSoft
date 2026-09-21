@@ -15,6 +15,7 @@ import {
 } from './document.js';
 import { T } from './elements.js';
 import { beautifySelection } from './tools.js';
+import { getPref, setPref, autoSaveLabel } from './prefs.js';
 
 class App {
   constructor() {
@@ -28,6 +29,10 @@ class App {
     this.editor.inline = new InlineEditor(this.editor);
     this.ui = new UI(this, { canvas, overlay, canvasWrap });
     this.modified = false;
+    this.saving = false;
+    // Auto-save is a machine-level preference, so it survives a reload.
+    this.autoSaveMinutes = Number(getPref('autoSaveMinutes', 0)) || 0;
+    this.autoSaveTimer = null;
     this.editor.doc.name = '未命名白板';
     this.ui.titleInput.value = this.editor.doc.name;
     this.bindGlobal();
@@ -37,6 +42,49 @@ class App {
     this.editor.centerPage();
     this.editor.requestRender();
     setTimeout(() => this.editor.resize(), 0);
+    this.startAutoSave();
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Auto-save
+   * ---------------------------------------------------------------- */
+
+  /**
+   * (Re)arm the auto-save timer.  The interval is in minutes; 0 turns it off.
+   * Fractions are allowed so tests can drive the real timer.
+   */
+  startAutoSave() {
+    if (this.autoSaveTimer) clearInterval(this.autoSaveTimer);
+    this.autoSaveTimer = null;
+    if (!this.autoSaveMinutes) return;
+    const period = Math.max(200, this.autoSaveMinutes * 60 * 1000);
+    this.autoSaveTimer = setInterval(() => { this.autoSaveTick(); }, period);
+  }
+
+  /** Change the interval and remember it for the next session. */
+  setAutoSave(minutes) {
+    this.autoSaveMinutes = Number(minutes) || 0;
+    setPref('autoSaveMinutes', this.autoSaveMinutes);
+    this.startAutoSave();
+    this.ui.syncStatus();
+    this.ui.toast(this.autoSaveMinutes
+      ? `自动保存已开启：每 ${autoSaveLabel(this.autoSaveMinutes)}（仅对已保存过的文件生效）`
+      : '自动保存已关闭', 'ok', 2200);
+  }
+
+  /**
+   * One auto-save tick: writes the open file when it has unsaved changes.
+   *
+   * Skipped (until the next tick) when there is nothing to do, so the timer can
+   * never annoy the user: no file on disk yet, no changes, or a save already in
+   * flight.  Text being edited inline is saved as-is — the model already holds
+   * every keystroke, so the editor stays open.
+   */
+  async autoSaveTick() {
+    if (!this.autoSaveMinutes || this.saving) return false;
+    if (!this.modified) return false;
+    if (!this.editor.doc.path) return false;
+    return this.save({ auto: true, keepEditing: true });
   }
 
   markModified() {
@@ -410,14 +458,23 @@ class App {
   /* ---------------------------------------------------------------- *
    * Save / export
    * ---------------------------------------------------------------- */
-  async save() {
+  /**
+   * Write the open file.
+   *
+   * @param {{auto?: boolean, keepEditing?: boolean}} opts
+   *   `auto` tags the toast as an automatic save; `keepEditing` leaves the
+   *   inline text editor open (the auto-save timer must not pull it away).
+   */
+  async save({ auto = false, keepEditing = false } = {}) {
     const ed = this.editor;
     const doc = ed.doc;
-    if (!doc.path) return this.saveAs();
+    if (!doc.path) return auto ? false : this.saveAs();
+    if (this.saving) return false;
     const ui = this.ui;
+    this.saving = true;
     try {
       ui.progress('正在保存 ' + doc.path + ' …');
-      if (ed.inline?.isEditing) ed.inline.commit(true);
+      if (!keepEditing && ed.inline?.isEditing) ed.inline.commit(true);
       const newFiles = await ed.resources.newFilesAsBase64();
       if (doc._pdfBytes && doc.document?.fileName) {
         newFiles['Resources/Document/' + doc.document.fileName] = bytesToBase64(doc._pdfBytes);
@@ -425,11 +482,17 @@ class App {
       const out = await saveNote(doc, { target: doc.path, newFiles });
       this.markSaved();
       ui.progress('');
-      ui.toast(`已保存 ${out.target}（${formatBytes(out.bytes)}）`, 'ok');
+      ui.toast(auto
+        ? `已自动保存 ${out.target}（${formatBytes(out.bytes)}）`
+        : `已保存 ${out.target}（${formatBytes(out.bytes)}）`, 'ok', auto ? 1800 : 2600);
       ui.syncStatus();
+      return true;
     } catch (err) {
       ui.progress('');
-      ui.toast('保存失败：' + err.message, 'error', 6000);
+      ui.toast((auto ? '自动保存失败：' : '保存失败：') + err.message, 'error', 6000);
+      return false;
+    } finally {
+      this.saving = false;
     }
   }
 

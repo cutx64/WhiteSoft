@@ -11,6 +11,7 @@ import { el, $, $$, argbToHex, hexToArgb, argbAlpha, formatBytes, clamp, argbToR
 import { SceneRenderer, renderOptions } from './render.js';
 import { SelectionBar } from './selectionbar.js';
 import { T, PALETTE, GRADIENT_PENS, REACTIONS } from './elements.js';
+import { AUTO_SAVE_CHOICES, autoSaveLabel } from './prefs.js';
 
 const ICONS = {
   menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
@@ -378,8 +379,9 @@ export class UI {
     this.pageTotal.textContent = `/ ${ed.pageCount}`;
     const p = ed.page;
     const pdfPage = p.pdfPages && p.pdfPages.length ? ` · PDF 第 ${p.pdfPages[0].pageNumber} 页` : '';
+    const auto = this.app?.autoSaveMinutes ? ` · 自动保存 ${autoSaveLabel(this.app.autoSaveMinutes)}` : '';
     this.statusRight.textContent =
-      `画纸 ${ed.pageIndex + 1}/${ed.pageCount}${pdfPage} · ${p.elements.length} 个元素 · ${Math.round(ed.camera.zoom * 100)}%`;
+      `画纸 ${ed.pageIndex + 1}/${ed.pageCount}${pdfPage} · ${p.elements.length} 个元素 · ${Math.round(ed.camera.zoom * 100)}%${auto}`;
   }
 
   jumpToInput() {
@@ -1033,9 +1035,25 @@ export class UI {
         },
       }));
     }
+    const autoRow = el('div', { class: 'wb-chiprow' });
+    for (const c of AUTO_SAVE_CHOICES) {
+      autoRow.append(el('button', {
+        class: 'wb-chip' + (this.app.autoSaveMinutes === c.minutes ? ' active' : ''), type: 'button', text: c.label,
+        title: c.minutes ? `每 ${c.label}自动保存当前打开的文件` : '关闭自动保存',
+        onclick: (e) => {
+          this.app.setAutoSave(c.minutes);
+          $$('.wb-chip', autoRow).forEach((n) => n.classList.remove('active'));
+          e.currentTarget.classList.add('active');
+        },
+      }));
+    }
+
     const content = el('div', { class: 'wb-flyout-body' },
       el('div', { class: 'wb-flyout-label', text: '工具栏位置' }), locRow,
       el('div', { class: 'wb-flyout-label', text: '新建 / 打开白板时的默认比例' }), defaultRow,
+      el('div', { class: 'wb-flyout-label', text: '自动保存' }), autoRow,
+      el('p', { class: 'wb-hint', text: '只对已经保存过文件的白板生效（新白板先按 Ctrl+S 存一次）；'
+        + '有改动才会写盘，正在输入文字时也不会打断你。设置会记住。' }),
       el('div', { class: 'wb-flyout-label', text: '绘制' }),
       el('div', { class: 'wb-row' },
         toggle('对象吸附对齐', ed.snapEnabled, (v) => { ed.snapEnabled = v; }),

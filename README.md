@@ -304,6 +304,10 @@ go run github.com/grindlemire/go-tui/cmd/tui@v0.22.1 generate ./...
   拖放 `.note` 或 `.pdf` 到窗口打开。
 - **未保存更改有确认框**：打开其他 `.note`、导入 PDF 或新建白板前会先弹出
   （取消 / 放弃更改 / 保存并继续）。
+- **自动保存**：设置里可选 关闭 / 1 / 2 / 5 / 10 / 30 分钟 / 1 小时，到点自动把当前打开的
+  文件写回磁盘（只有改过才写，写的时候不会打断正在输入的文字）。设置记在浏览器里，
+  刷新后仍然有效，底栏会显示当前间隔。只对**已经保存过文件**的白板生效，
+  新白板请先 `Ctrl+S` 存一次。
 - **快捷键区分大小写**：小写字母是工具（`N` = 便签），大写字母是独立绑定
   （`Shift+N` = 新建白板），所以 `Shift+N` 不会误触发便签工具。
 - **其他**：完整撤销重做（默认 300 步）、中文输入法友好的文本编辑、
@@ -453,6 +457,7 @@ public/
 │   ├── render.js           Canvas 渲染器（世界坐标缓存 + 路径缓存）
 │   ├── elements.js         元素模型 + 调色板 + 命中测试 + 几何变换
 │   ├── mathtext.js         LaTeX：分隔符解析、MathJax 排版、位图缓存、富文本排版
+│   ├── prefs.js            机器级偏好（自动保存间隔）的读写
 │   ├── selectionbar.js     所选操作栏
 │   ├── document.js         文档模型 + .note 读写 + PDF 导入排版
 │   ├── pdfmanager.js       pdf.js 封装（分页位图缓存、CJK CMap）
@@ -500,6 +505,8 @@ node test/round4.mjs              # 28 项：第一次框选只选择不移动�
 node test/strokes.mjs             # 9 项：笔迹连续性 —— 沿每条墨迹中线逐像素采样，要求 100% 命中
 node test/sticky.mjs              # 22 项：便签圆角 / 颜色 / 透明度、操作栏按所选内容增减按钮、
                                   #        「编辑」按钮直接进入编辑、一步撤销、像素级外观验证
+node test/autosave.mjs            # 18 项：自动保存 —— 设置项与持久化、定时真的写盘、
+                                  #        无改动 / 无文件 / 正在输入时的行为
 node test/math.mjs                # 34 项：LaTeX —— 分隔符解析、MathJax 排版与栅格化、公式驱动排版、
                                   #        独立公式独占行、坏公式、缓存与重绘、导出含公式、
                                   #        编辑态不重影（文本框 / 便签 / 表格）、以及"选工具→点击→打字→提交"的真实交互
@@ -511,7 +518,7 @@ node test/inline.mjs              # 内联编辑器（文本 / 便签 / 表格�
 node test/final.mjs               # 脏标记：干净加载不显示、编辑后显示
 ```
 
-`e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` 结束时打印
+`e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` / `autosave` 结束时打印
 `===== N/N 通过 =====`，有失败项时以非零码退出。
 
 Go 侧（桌面端）自带单元测试，`launcher` 那组会真的启一个 node 子进程并等它的健康检查：
@@ -526,7 +533,7 @@ cd desktop && go test ./...       # notes / launcher / tui 三个包
 > **注意**：`e2e.mjs`、`round2.mjs`、`round3.mjs` 里有针对两个私有样例白板的硬编码断言
 > （446 页 / 655 页、第 265 页 1751 个元素、第 168 页的 14 条直尺高亮等），
 > 仓库里**不含**这两个文件。要复现请把它们放到工作区根目录（或按自己的白板改断言）；
-> `math.mjs` / `sticky.mjs` / `strokes.mjs` / `smoke.mjs` / `visual.mjs` 自带内容或支持
+> `math.mjs` / `sticky.mjs` / `autosave.mjs` / `strokes.mjs` / `smoke.mjs` / `visual.mjs` 自带内容或支持
 > `--note <你的文件>`，不需要样例白板。
 
 本仓库最近一次全量运行（Linux、无头 Chromium 153、软件渲染）：
@@ -540,6 +547,7 @@ cd desktop && go test ./...       # notes / launcher / tui 三个包
 | `test/strokes.mjs` | **9 / 9 通过** |
 | `test/math.mjs` | **34 / 34 通过** |
 | `test/sticky.mjs` | **22 / 22 通过** |
+| `test/autosave.mjs` | **18 / 18 通过** |
 | `desktop` `go test ./...` | **全部通过**（notes / launcher / tui）|
 
 ---
