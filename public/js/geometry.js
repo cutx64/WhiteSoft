@@ -250,3 +250,113 @@ export function smoothPoints(points, passes = 1) {
   }
   return pts;
 }
+
+/* ------------------------------------------------------------------ *
+ * Curve fitting
+ * ------------------------------------------------------------------ */
+/**
+ * Least-squares polynomial fit of `ys` against `xs`, highest degree last.
+ *
+ * Solved through the normal equations with Gaussian elimination and partial
+ * pivoting.  Both axes are expected to be normalised by the caller (see
+ * `fitParametricCurve`), which is what keeps a degree-9 system well behaved.
+ *
+ * @returns {number[]|null} coefficients `[a0, a1, … ad]`, or null when the
+ *   system is singular (too few points, or a degenerate stroke)
+ */
+export function fitPolynomial(xs, ys, degree) {
+  const n = degree + 1;
+  const A = Array.from({ length: n }, () => new Array(n + 1).fill(0));
+  for (let i = 0; i < xs.length; i++) {
+    const powers = new Array(2 * n).fill(1);
+    for (let k = 1; k < 2 * n; k++) powers[k] = powers[k - 1] * xs[i];
+    for (let r = 0; r < n; r++) {
+      for (let c = 0; c < n; c++) A[r][c] += powers[r + c];
+      A[r][n] += powers[r] * ys[i];
+    }
+  }
+  // Gaussian elimination with partial pivoting.
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(A[r][col]) > Math.abs(A[pivot][col])) pivot = r;
+    if (Math.abs(A[pivot][col]) < 1e-12) return null;
+    if (pivot !== col) { const t = A[pivot]; A[pivot] = A[col]; A[col] = t; }
+    const d = A[col][col];
+    for (let c = col; c <= n; c++) A[col][c] /= d;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = A[r][col];
+      if (!f) continue;
+      for (let c = col; c <= n; c++) A[r][c] -= f * A[col][c];
+    }
+  }
+  return A.map((row) => row[n]);
+}
+
+/** Evaluate `[a0, a1, … ]` at `x` (Horner). */
+function evalPolynomial(coeffs, x) {
+  let out = 0;
+  for (let i = coeffs.length - 1; i >= 0; i--) out = out * x + coeffs[i];
+  return out;
+}
+
+/**
+ * Fit a smooth high-degree curve through a freehand stroke.
+ *
+ * The stroke is fitted **parametrically** — x(t) and y(t) against the arc
+ * length — so an arbitrary drawing (vertical parts, loops, a signature) comes
+ * out as one smooth curve, which a plain y(x) fit could never do.  Points are
+ * normalised before fitting and the result is sampled uniformly in t, so the
+ * caller gets a tidy polyline it can hand to the renderer.
+ *
+ * @param {{x: number, y: number}[]} points raw stroke
+ * @param {{degree?: number, samples?: number}} opts
+ * @returns {{x: number, y: number}[]} fitted samples (empty when unfittable)
+ */
+export function fitParametricCurve(points, { degree = 0, samples = 96 } = {}) {
+  const pts = (points || []).filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (pts.length < 3) return [];
+  // Arc length gives a parameter that follows the stroke instead of the x axis.
+  const t = [0];
+  for (let i = 1; i < pts.length; i++) {
+    t.push(t[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  }
+  const total = t[t.length - 1];
+  if (!(total > 0)) return [];
+  const xs = t.map((v) => v / total);
+  // Normalise y as well: absolute world coordinates are large, and a raw fit of
+  // e.g. x ≈ 3000 would lose all its precision in a degree-9 system.
+  const minX = Math.min(...pts.map((p) => p.x));
+  const minY = Math.min(...pts.map((p) => p.y));
+  const spanX = Math.max(1e-6, Math.max(...pts.map((p) => p.x)) - minX);
+  const spanY = Math.max(1e-6, Math.max(...pts.map((p) => p.y)) - minY);
+  const nx = pts.map((p) => (p.x - minX) / spanX);
+  const ny = pts.map((p) => (p.y - minY) / spanY);
+  // Enough freedom to follow a real drawing, few enough terms to stay stable.
+  const want = degree > 0 ? degree : Math.max(2, Math.min(9, Math.floor(pts.length / 6)));
+  const deg = Math.max(1, Math.min(want, pts.length - 1));
+  const cx = fitPolynomial(xs, nx, deg) || fitPolynomial(xs, nx, Math.min(2, pts.length - 1));
+  const cy = fitPolynomial(xs, ny, deg) || fitPolynomial(xs, ny, Math.min(2, pts.length - 1));
+  if (!cx || !cy) return [];
+  const out = [];
+  for (let i = 0; i < samples; i++) {
+    const u = i / (samples - 1);
+    out.push({
+      x: minX + evalPolynomial(cx, u) * spanX,
+      y: minY + evalPolynomial(cy, u) * spanY,
+    });
+  }
+  return out;
+}
+
+/** Longest distance between a stroke and the curve fitted through it. */
+export function curveFitError(points, fitted) {
+  if (!points?.length || !fitted?.length) return Infinity;
+  let worst = 0;
+  for (const p of points) {
+    let best = Infinity;
+    for (const q of fitted) best = Math.min(best, Math.hypot(p.x - q.x, p.y - q.y));
+    worst = Math.max(worst, best);
+  }
+  return worst;
+}

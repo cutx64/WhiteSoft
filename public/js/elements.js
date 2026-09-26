@@ -83,15 +83,43 @@ export const PALETTE = {
   ],
 };
 
-/** Two-stop-plus gradients used by Whiteboard's Rainbow and Aurora pens. */
-export const GRADIENT_PENS = [
-  {
-    name: '彩虹', stops: ['#D09734', '#EFB73B', '#E6C245', '#82AE3E', '#3EA03D', '#23A46A', '#2F9794', '#40A3AD'],
-  },
-  {
-    name: '极光', stops: ['#583D71', '#546C9D', '#739CBD', '#7BBAC7', '#97CDCF', '#8CD1B5'],
-  },
+/**
+ * Ink gradients.
+ *
+ * The first two are the ones Microsoft Whiteboard ships (彩虹 / 极光); the rest
+ * are the familiar matplotlib colormaps, sampled at even intervals — enough
+ * stops that a stroke reads as the colormap instead of a few bands.
+ *
+ * `id` is what an element stores in `inkGradient`, so these names travel with
+ * the document (Whiteboard ignores the field and paints the stroke solid).
+ */
+export const GRADIENTS = [
+  { id: 'rainbow', name: '彩虹', stops: ['#D09734', '#EFB73B', '#E6C245', '#82AE3E', '#3EA03D', '#23A46A', '#2F9794', '#40A3AD'] },
+  { id: 'aurora', name: '极光', stops: ['#583D71', '#546C9D', '#739CBD', '#7BBAC7', '#97CDCF', '#8CD1B5'] },
+  { id: 'viridis', name: 'viridis', stops: ['#440154', '#46327E', '#365C8D', '#277F8E', '#1FA187', '#4AC16D', '#A0DA39', '#FDE725'] },
+  { id: 'plasma', name: 'plasma', stops: ['#0D0887', '#5B02A3', '#9A179B', '#CB4679', '#ED7953', '#FB9F3A', '#FDCA26', '#F0F921'] },
+  { id: 'inferno', name: 'inferno', stops: ['#000004', '#1B0C41', '#4A0C6B', '#781C6D', '#A52C60', '#CF4446', '#ED6925', '#FB9B06', '#F7D13D', '#FCFFA4'] },
+  { id: 'magma', name: 'magma', stops: ['#000004', '#180F3D', '#440F76', '#721F81', '#9E2F7F', '#CD4071', '#F1605D', '#FD9668', '#FEC98D', '#FCFDBF'] },
+  { id: 'cividis', name: 'cividis', stops: ['#00204D', '#00336F', '#39486B', '#575D6D', '#707173', '#8A8779', '#A69D75', '#C4B476', '#E4CC7B', '#FFEA46'] },
+  { id: 'turbo', name: 'turbo', stops: ['#30123B', '#4145AB', '#4675ED', '#39A2FC', '#1BCFD4', '#62FC6B', '#BAF73C', '#F1CA3A', '#FB7E21', '#D93806', '#7A0403'] },
+  { id: 'jet', name: 'jet', stops: ['#000080', '#0000FF', '#0080FF', '#00FFFF', '#80FF80', '#FFFF00', '#FF8000', '#FF0000', '#800000'] },
+  { id: 'coolwarm', name: 'coolwarm', stops: ['#3B4CC0', '#6F92F3', '#A3C4F8', '#D0DCF7', '#F2D5CF', '#F6A582', '#DD5F4B', '#B40426'] },
+  { id: 'spring', name: 'spring', stops: ['#FF00FF', '#FF40BF', '#FF8080', '#FFBF40', '#FFFF00'] },
+  { id: 'summer', name: 'summer', stops: ['#008066', '#4CA666', '#99CC66', '#E5F266'] },
+  { id: 'autumn', name: 'autumn', stops: ['#FF0000', '#FF4000', '#FF8000', '#FFBF00', '#FFFF00'] },
+  { id: 'winter', name: 'winter', stops: ['#0000FF', '#0040E5', '#0080CC', '#00BFB2', '#00FF99'] },
+  { id: 'ocean', name: 'ocean', stops: ['#007F00', '#008060', '#0080BF', '#005FBF', '#003F9F', '#001F7F'] },
+  { id: 'terrain', name: 'terrain', stops: ['#333399', '#0099FF', '#00CC99', '#66CC66', '#CCCC66', '#CC9966', '#CC6633', '#FFFFFF'] },
+  { id: 'twilight', name: 'twilight', stops: ['#E2D9E2', '#8A79A8', '#4A4A7A', '#2B2B4F', '#4A2B4F', '#8A4A5A', '#C97A6A', '#E2B0A0'] },
 ];
+
+/** Gradient lookup by id (falls back to the rainbow pen). */
+export function gradientById(id) {
+  return GRADIENTS.find((g) => g.id === id) || GRADIENTS[0];
+}
+
+/** Legacy view of the two gradients, kept for callers that only need a list. */
+export const GRADIENT_PENS = GRADIENTS.slice(0, 2).map((g) => ({ name: g.name, stops: g.stops }));
 
 /** The eight reactions Whiteboard offers. */
 export const REACTIONS = ['⭐', '❤️', '✅', '❌', '👍', '❓', '🙂', '👏'];
@@ -435,6 +463,63 @@ export function polygonPointsFor(type, rect) {
     }
   }
   return pts;
+}
+
+/**
+ * Points of a preset curve shape, fitted into `rect`.
+ *
+ * Returns an *array of point arrays*: most curves are a single open path, but a
+ * hyperbola is two disjoint branches, which the `.note` format can only express
+ * as two elements (one polyline each) — the drawing tool adds them as a group.
+ *
+ * @param {'parabola'|'hyperbola'|'sine'|'cubic'} curve
+ * @param {Rect} rect
+ * @param {number} samples points per branch
+ */
+export function curvePointsFor(curve, rect, samples = 96) {
+  const b = rect.normalized();
+  const cx = b.cx, cy = b.cy, rx = Math.max(1e-6, b.w / 2), ry = Math.max(1e-6, b.h / 2);
+  const N = Math.max(8, samples);
+  const at = (u, v) => ({ x: cx + u * rx, y: cy - v * ry });   // u/v in [-1, 1]
+  const path = (f, from = -1, to = 1) => {
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      const u = from + ((to - from) * i) / (N - 1);
+      pts.push(at(u, f(u)));
+    }
+    return pts;
+  };
+  if (curve === 'parabola') {
+    // y = x²: vertex on the bottom edge, arms up to the top corners, so the
+    // curve uses the whole dragged box.
+    return [path((u) => 2 * u * u - 1)];
+  }
+  if (curve === 'cubic') {
+    // y = x³, the classic S curve.
+    return [path((u) => u * u * u * 0.85)];
+  }
+  if (curve === 'sine') {
+    // two full periods across the box
+    return [path((u) => Math.sin(u * Math.PI * 2) * 0.8)];
+  }
+  if (curve === 'hyperbola') {
+    // x²/a² − y²/b² = 1 → x = ±a·cosh(t), y = b·sinh(t).  Scaling by the
+    // branch ends keeps both of them inside the dragged box: each one runs from
+    // the top/bottom edges towards the middle, never crossing the centre.
+    const T = Math.asinh(1 / 0.55);
+    const coshT = Math.cosh(T);
+    const sinhT = Math.sinh(T);
+    const branch = (sign) => {
+      const pts = [];
+      for (let i = 0; i < N; i++) {
+        const t = -T + (2 * T * i) / (N - 1);
+        pts.push(at((sign * Math.cosh(t)) / coshT, (Math.sinh(t) * 0.95) / sinhT));
+      }
+      return pts;
+    };
+    return [branch(-1), branch(1)];
+  }
+  return [path((u) => u * u - 0.5)];
 }
 
 export function shapeToRect(e) {

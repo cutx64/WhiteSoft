@@ -16,6 +16,14 @@ Canvas 应用，由本机一个**零运行时依赖**的 Node 进程把页面发
   **按原始坐标忠实还原**；改完再存回 `.note`，得到的文件可以用 Microsoft Whiteboard 打开。
 - **文本与便签支持 LaTeX** —— 在文本框或便签里写 `$x^2$` / `$$\int_0^1 x\,dx$$`，
   由内置的 **MathJax** 渲染成真正的数学排版（离线，无需联网）。
+- **全色系取色器** —— 笔、荧光笔、边框、填充、文本、便签、画布背景、所选操作栏：
+  每一处都是「预设色板 + 可展开的全色系调色盘」（饱和度/明度方块、色相条、需要时的不透明度条、
+  十六进制输入、实时预览，键盘方向键也能微调），取到的颜色仍以 `#AARRGGBB` 存进 `.note`。
+- **曲线形状** —— 形状面板里新增 **抛物线 / 双曲线 / 正弦波 / 三次曲线**（拖出一个范围，
+  曲线自动铺满，可虚线/填充），以及 **任意画 → 高次曲线拟合**：随手画一条线，
+  松手后由最小二乘参数多项式拟合成一条光滑高次曲线（对勾、竖线、连笔都行）。
+  曲线按普通折线（`T.POLYLINE`）保存，是 Microsoft Whiteboard 原本就有的元素类型，
+  双曲线是两条分支两个元素、一次绘制一次撤销。
 - **桌面端（Go）** —— `desktop/` 里是一个轻量 Go 程序：自动拉起同一个网页端并打开窗口，
   还带一个 **go-tui 终端管理器**，可以在终端里浏览、检索、统计某个目录下的 `.note`（只读）。
 - **文件就是文件** —— 打开用系统文件对话框，`Ctrl+S` 原地写回；最近列表记的是**位置**
@@ -35,7 +43,9 @@ Canvas 应用，由本机一个**零运行时依赖**的 Node 进程把页面发
 > (one whiteboard page per PDF page) and reads/writes the local `.note` format with full
 > fidelity: ink, highlighters, shapes, images, text, tables, sticky notes and the PDF
 > backdrop, all in their original world coordinates. Text boxes and sticky notes render
-> **LaTeX** (`$…$` / `$$…$$`) with a bundled MathJax. Saving is non-destructive — every
+> **LaTeX** (`$…$` / `$$…$$`) with a bundled MathJax, a full-spectrum colour picker
+> everywhere a colour is chosen, and curve shapes (parabola, hyperbola, sine, cubic)
+> plus a "draw anything → fit a high-degree curve" tool. Saving is non-destructive — every
 > entry of the source archive is carried over verbatim — and a one-click **compact**
 > command shows what it would drop, then rewrites the archive without the resources no
 > page references (re-deflating entries that were stored uncompressed) while copying
@@ -191,8 +201,11 @@ go run github.com/grindlemire/go-tui/cmd/tui@v0.22.1 generate ./...
 
 ### 墨迹与笔
 
-- **3 支可分别自定义的笔**（`Alt+1/2/3` 切换）：各有 15 色 + 彩虹/极光渐变笔、
-  粗细 1–20 连续滑块、不透明度、无/单/双箭头。
+- **3 支可分别自定义的笔**（`Alt+1/2/3` 切换）：各有 15 色 + **17 种渐变笔**
+  （Whiteboard 的彩虹/极光，加上 matplotlib 的 viridis / plasma / inferno / magma /
+  cividis / turbo / jet / coolwarm / spring / summer / autumn / winter / ocean /
+  terrain / twilight）、粗细 1–20 连续滑块、不透明度、无/单/双箭头。
+  换颜色或换渐变后，面板里笔 1/2/3 前面的小圆点会**立刻**跟着变。
 - **荧光笔**：15 色、半透明、粗细 8–60，带**「直线绘制」开关** —— 开启后像直线工具一样
   拉出笔直的高亮。
 - **激光笔**（不落墨、自动淡出）、**橡皮擦**（整笔擦除）、`Shift` 画直线/正方形/正圆。
@@ -215,6 +228,40 @@ go run github.com/grindlemire/go-tui/cmd/tui@v0.22.1 generate ./...
 形状（正方形 / 圆 / 三角形 / 五边形 / 六边形 / 五角星 / 块状箭头 / 平行四边形 / 菱形 /
 圆角矩形，以及虚线 / 直线 / 单箭头 / 双箭头，可填充）、文本框、便签（12 色）、表格、
 图片（插入 / 粘贴 / 缩放 / 旋转）、反应（8 个 emoji）。
+
+### 曲线形状与任意画拟合
+
+形状面板的第二栏是**曲线**，拖出一个范围就得到铺满该范围的曲线：
+
+| 曲线 | 说明 |
+|---|---|
+| **抛物线** | `y = x²`，顶点在下边缘、两端伸到上角 |
+| **双曲线** | `x²/a² − y²/b² = 1`，左右两条分支，各自从下到上、停在中线两侧 |
+| **正弦波** | 跨两个完整周期，振幅 80% 高度 |
+| **三次曲线** | `y = x³`，向右单调上升的 S 形 |
+
+同样支持**虚线**和**填充**（填充会把曲线与基线收口成闭合图形）。曲线存成普通折线
+（`T.POLYLINE`，96 个点），这是 Microsoft Whiteboard 本来就有的元素类型，所以文件在
+原版里照样能打开；双曲线是两条分支、两个元素，但**一次绘制只记一步撤销**。
+
+**任意画 → 高次曲线拟合**：形状面板最后一格（或选中墨迹后用「更多 → 曲线拟合所选墨迹」）。
+随手画一条线，松手后会用**最小二乘参数多项式**（`x(t)`、`y(t)` 对弧长拟合，最高 9 次）
+把它换成一条光滑曲线 —— 参数化意味着竖线、对勾、连笔也能拟合，而不只是函数图像。
+拟合结果与原笔迹的偏差超过范围时宁可不换，仍然保留原来的墨迹。
+
+### 全色系取色器
+
+凡是能选颜色的地方（笔、荧光笔、形状边框、形状填充、文本、便签、画布背景、
+所选操作栏）都是同一个控件：**预设色板 + 「🎨 自定义颜色」**。展开后是一个全色系调色盘：
+
+- **饱和度/明度方块**：指针拖动取色，方向键可微调（`Shift` 加大步长）；
+- **色相条**：0–359°；
+- **不透明度条**：只在透明度没有被别的滑块管着的地方出现（便签有，笔有自己的不透明度滑块）；
+- **十六进制输入**：直接敲 `#RRGGBB`；
+- **实时预览**：拖动时画布/对象立刻跟着变，松手才写一步撤销（操作栏改色就是这样）。
+
+颜色在内部一律是 `#AARRGGBB`（`.note` 的格式），所以自定义颜色和预设一样会随文件保存，
+Microsoft Whiteboard 打开也是同一个颜色。
 
 ### 便签样式
 
@@ -485,6 +532,7 @@ public/
 │   ├── render.js           Canvas 渲染器（世界坐标缓存 + 路径缓存）
 │   ├── elements.js         元素模型 + 调色板 + 命中测试 + 几何变换
 │   ├── mathtext.js         LaTeX：分隔符解析、MathJax 排版、位图缓存、富文本排版
+│   ├── colorpicker.js      全色系取色器（HSV 方块 + 色相/不透明度 + 十六进制）
 │   ├── zipread.js          浏览器端随机访问 ZIP（直接读本机文件）
 │   ├── zipwrite.js         流式 ZIP 写入：未改动的条目按原样搬运（就地保存用）
 │   ├── filehandles.js      本地文件句柄（最近列表与就地保存的「位置链接」）
@@ -494,7 +542,7 @@ public/
 │   ├── pdfmanager.js       pdf.js 封装（分页位图缓存、CJK CMap）
 │   ├── resources.js        图片资源缓存
 │   ├── inlineeditor.js     文本 / 便签 / 表格的 DOM 内联编辑器（中文输入法友好）
-│   ├── geometry.js         Rect / 句柄 / 命中几何 / 曲线简化
+│   ├── geometry.js         Rect / 句柄 / 命中几何 / 曲线简化 / 最小二乘参数曲线拟合
 │   ├── history.js          撤销重做（默认 300 步）
 │   └── util.js             杂项
 └── vendor/
@@ -555,6 +603,15 @@ node test/compact.mjs             # 20 项：一键压缩 —— 预览只报未
                                   #        未改动的图片按原样搬运、未知目录条目保留、幂等、压缩后再保存不会
                                   #        把删掉的资源带回来、未压缩存放的条目被重新压缩、
                                   #        没有可写句柄 / 不是白板时明确拒绝
+node test/colorpicker.mjs         # 23 项：全色系取色器 —— 每个取色处都有（笔/荧光笔/形状/填充/文本/
+                                  #        便签/画布背景/操作栏）、拖动与色相条实时生效、十六进制精确取色、
+                                  #        键盘微调、不透明度只出现在该出现的地方、操作栏里只记一步撤销、
+                                  #        取到的颜色仍以 #AARRGGBB 存进 .note；渐变笔库、指示色实时刷新、
+                                  #        渐变笔画出来两端颜色确实不同
+node test/curves.mjs              # 18 项：曲线形状 —— 抛物线/双曲线/正弦/三次的几何正确性（铺满范围、
+                                  #        两条分支、周期数、单调性）、填充收口、**每个按钮画出来的都是
+                                  #        它自己那条曲线**（走真实工具路径）、真实鼠标拖出一条曲线、
+                                  #        任意画拟合（贴合笔迹、一步撤销、太短会拒绝）、保存回读
 node test/math.mjs                # 34 项：LaTeX —— 分隔符解析、MathJax 排版与栅格化、公式驱动排版、
                                   #        独立公式独占行、坏公式、缓存与重绘、导出含公式、
                                   #        编辑态不重影（文本框 / 便签 / 表格）、以及"选工具→点击→打字→提交"的真实交互
@@ -570,7 +627,7 @@ node test/final.mjs               # 脏标记：干净加载不显示、编辑�
 ```
 
 `e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` / `autosave` / `resources` / `openflow` /
-`savekeys` / `compact` / `thumbs` 结束时打印
+`savekeys` / `compact` / `thumbs` / `colorpicker` / `curves` 结束时打印
 `===== N/N 通过 =====`，有失败项时以非零码退出。
 
 Go 侧（桌面端）自带单元测试，`launcher` 那组会真的启一个 node 子进程并等它的健康检查：
@@ -607,6 +664,8 @@ cd desktop && go test ./...       # notes / launcher / tui 三个包
 | `test/savekeys.mjs` | **17 / 17 通过** |
 | `test/compact.mjs` | **20 / 20 通过** |
 | `test/thumbs.mjs` | **19 / 19 通过** |
+| `test/colorpicker.mjs` | **23 / 23 通过** |
+| `test/curves.mjs` | **18 / 18 通过** |
 | `desktop` `go test ./...` | **全部通过**（notes / launcher / tui）|
 
 ---

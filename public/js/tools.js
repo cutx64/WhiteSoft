@@ -7,13 +7,14 @@
  */
 import {
   Rect, rectFromPoints, simplify, smoothPoints, rotatePoint, distToSegment,
+  fitParametricCurve, curveFitError,
   handlePositions, rotateHandlePosition, handleAnchor, HANDLE_IS_HORIZONTAL, HANDLE_IS_VERTICAL,
 } from './geometry.js';
 import { clamp, clone } from './util.js';
 import {
   T, makeInk, makePointsElement, makeText, makeSticky, makeTable, makeReaction,
   hitTest, elementBounds, localBounds, elementPoints, translateElement, scaleElement, rotateElement,
-  ellipsePointsFromRect, polygonPointsFor, IS_OBJECT,
+  ellipsePointsFromRect, polygonPointsFor, curvePointsFor, IS_OBJECT,
 } from './elements.js';
 
 const MIN_DRAW_DIST = 0.6;
@@ -235,6 +236,97 @@ export const eraserTool = {
 };
 
 /* ------------------------------------------------------------------ *
+ * Free drawing → one smooth high-degree curve
+ * ------------------------------------------------------------------ */
+/**
+ * Replace a freehand stroke with the smooth polynomial curve through it.
+ *
+ * The fit is parametric (see `fitParametricCurve`), so it follows whatever the
+ * user drew — verticals, loops, a signature — instead of only graphs.  The
+ * result is a polyline, which is exactly what the `.note` format stores anyway.
+ *
+ * @returns {object|null} the fitted element, or null when the stroke is too
+ *   short or the fit wanders too far from it (better to keep the ink than to
+ *   hand back a curve that ignores the drawing)
+ */
+export function fitCurveElement(e, { samples = 96 } = {}) {
+  const points = elementPoints(e);
+  if (!points || points.length < 4) return null;
+  const fitted = fitParametricCurve(points, { samples });
+  if (fitted.length < 2) return null;
+  const bounds = elementBounds(e);
+  const tolerance = Math.max(bounds.w, bounds.h) * 0.14 + 2;
+  if (curveFitError(points, fitted) > tolerance) return null;
+  const out = makePointsElement(T.POLYLINE, {
+    stroke: e.stroke, width: e.width, points: fitted, closed: false, dash: !!e.dash,
+  });
+  out.curveFit = true;
+  if (e.inkGradient) out.inkGradient = e.inkGradient;
+  return out;
+}
+
+/** The 任意画 curve tool: draw freely, get the fitted curve on release. */
+export const curveFitTool = {
+  name: 'curvefit',
+  cursor: 'crosshair',
+  _pts: null,
+  down(ed, p, ev) {
+    this._pts = [{ x: p.x, y: p.y, pr: pressure(ev) }];
+  },
+  move(ed, p, ev) {
+    if (!this._pts) return;
+    const q = { x: p.x, y: p.y, pr: pressure(ev) };
+    const last = this._pts[this._pts.length - 1];
+    if (Math.hypot(q.x - last.x, q.y - last.y) < MIN_DRAW_DIST / ed.camera.zoom) return;
+    this._pts.push(q);
+    this._update(ed);
+  },
+  up(ed) {
+    if (!this._pts) return;
+    const raw = this._pts;
+    this._pts = null;
+    ed.live = null;
+    if (raw.length < 4) {
+      // Too short to fit anything: keep it as ink so the gesture is never lost.
+      ed.addElement(makeInk({ stroke: ed.pen.color, width: ed.pen.width / ed.camera.zoom, points: raw }), { label: '书写' });
+      return;
+    }
+    const probe = makeInk({ stroke: ed.pen.color, width: ed.pen.width / ed.camera.zoom, points: raw });
+    const fitted = fitCurveElement(probe)
+      || makePointsElement(T.POLYLINE, {
+        stroke: ed.pen.color, width: ed.pen.width / ed.camera.zoom, points: smoothPoints(raw, 2), closed: false,
+      });
+    ed.addElement(fitted, { select: true, label: '曲线拟合' });
+  },
+  cancel(ed) { this._pts = null; ed.live = null; },
+  _update(ed) {
+    // Preview the raw stroke; the fitted curve replaces it on release.
+    ed.live = makeInk({
+      stroke: ed.pen.color, width: Math.max(1, ed.pen.width) / ed.camera.zoom, points: this._pts,
+    });
+  },
+};
+
+/** 曲线拟合 for whatever ink is selected (the 更多 menu entry). */
+export function fitSelectionToCurves(ed) {
+  const targets = [...ed.selection].filter((e) => e.type === T.INK || e.type === T.HIGHLIGHTER);
+  if (!targets.length) return 0;
+  const before = ed.snapshot();
+  let n = 0;
+  for (const e of targets) {
+    const fitted = fitCurveElement(e);
+    if (!fitted) continue;
+    const i = ed.page.elements.indexOf(e);
+    if (i >= 0) ed.page.elements.splice(i, 1, fitted);
+    ed.selection.delete(e);
+    ed.selection.add(fitted);
+    n++;
+  }
+  if (n) ed.commitSnapshot(before, '曲线拟合');
+  return n;
+}
+
+/* ------------------------------------------------------------------ *
  * Shapes
  * ------------------------------------------------------------------ */
 export const shapeTool = {
@@ -249,11 +341,14 @@ export const shapeTool = {
   move(ed, p, ev) { if (this._start) this._update(ed, p, ev); },
   up(ed, p, ev) {
     if (!this._start) return;
-    const e = this._build(ed, p, ev);
+    const built = this._build(ed, p, ev);
     this._start = null;
     ed.live = null;
-    if (e) {
-      ed.addElement(e, { select: true, label: '绘制形状' });
+    const list = (Array.isArray(built) ? built : [built]).filter(Boolean);
+    if (list.length) {
+      // A hyperbola arrives as two branches, i.e. two elements placed as one
+      // shape: they enter the history in a single step and stay selected.
+      ed.addElements(list, { select: true, label: '绘制形状' });
       // Whiteboard drops back to the pointer after a shape is placed.
       ed.setTool('select');
     }
@@ -266,7 +361,10 @@ export const shapeTool = {
     let x1 = p.x, y1 = p.y;
     const shift = ev.shiftKey || this._shift;
     const kind = ed.shapeKind;
-    const st = ed.shapeStyle;
+    // The curve family lives next to the style (it is what the shape panel's
+    // curve row selects), and `buildShapeElement` reads it from the style bag —
+    // without this merge every curve came out as the default parabola.
+    const st = kind === 'curve' ? { ...ed.shapeStyle, curve: ed.shapeCurve } : ed.shapeStyle;
 
     if (kind === T.LINE || kind === T.ARROW || kind === T.DOUBLE_ARROW) {
       if (shift) {
@@ -302,6 +400,24 @@ export const shapeTool = {
 };
 
 export function buildShapeElement(kind, rect, style) {
+  if (kind === 'curve') {
+    // Curve shapes are plain polylines: the `.note` format already has them
+    // (Microsoft Whiteboard draws them fine), and `curve` only records which
+    // family the points came from so the UI can show it as selected.
+    return curvePointsFor(style.curve || 'parabola', rect, 96).map((points) => {
+      const e = makePointsElement(T.POLYLINE, {
+        stroke: style.stroke, width: style.width, points, closed: false, dash: style.dash,
+      });
+      e.curve = style.curve || 'parabola';
+      if (style.filled) {
+        // Filling a curve closes it against the baseline, like a maths plot.
+        e.filled = true;
+        e.fill = style.fill || style.stroke;
+        e.closed = true;
+      }
+      return e;
+    });
+  }
   if (kind === T.ELLIPSE) {
     return makePointsElement(T.ELLIPSE, {
       stroke: style.stroke, width: style.width, points: ellipsePointsFromRect(rect), closed: true, dash: style.dash,
@@ -864,6 +980,7 @@ export const TOOLS = {
   laser: laserTool,
   eraser: eraserTool,
   shape: shapeTool,
+  curvefit: curveFitTool,
   text: textTool,
   sticky: stickyTool,
   table: tableTool,

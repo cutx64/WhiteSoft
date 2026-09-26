@@ -10,7 +10,8 @@
 import { el, $, $$, argbToHex, hexToArgb, argbAlpha, formatBytes, clamp, argbToRgba } from './util.js';
 import { SceneRenderer, renderOptions } from './render.js';
 import { SelectionBar } from './selectionbar.js';
-import { T, PALETTE, GRADIENT_PENS, REACTIONS } from './elements.js';
+import { T, PALETTE, GRADIENTS, REACTIONS } from './elements.js';
+import { colorPicker, parseColor } from './colorpicker.js';
 import { AUTO_SAVE_CHOICES, autoSaveLabel } from './prefs.js';
 
 const ICONS = {
@@ -56,6 +57,7 @@ const ICONS = {
   unlock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2"/>',
   wand: '<path d="M4 20L16 8"/><path d="M14 3l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/><path d="M19 13l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>',
   compress: '<path d="M3 3l7 7M21 3l-7 7M3 21l7-7M21 21l-7-7"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/>',
+  curve: '<path d="M3 18c3-2 6 1 9-1s6-3 9-1"/><circle cx="12" cy="16.2" r="1.3"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/>',
   dots: '<circle cx="6" cy="6" r="1.4"/><circle cx="12" cy="6" r="1.4"/><circle cx="18" cy="6" r="1.4"/><circle cx="6" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18" cy="12" r="1.4"/><circle cx="6" cy="18" r="1.4"/><circle cx="12" cy="18" r="1.4"/><circle cx="18" cy="18" r="1.4"/>',
@@ -599,6 +601,30 @@ export class UI {
 
   invalidateThumbs() { this.thumbCache?.clear(); }
 
+  /**
+   * Repaint the pen indicators of the open flyout.
+   *
+   * The three pen slots show *what each pen currently draws* — colour or
+   * gradient — so they have to follow a colour change immediately instead of
+   * waiting for the next time the flyout is opened.
+   */
+  syncPenIndicators() {
+    const ed = this.editor;
+    if (!this.flyout) return;
+    for (const dot of this.flyout.querySelectorAll('.wb-penslot-dot[data-pen-dot]')) {
+      const pen = ed.pens[Number(dot.dataset.penDot)];
+      if (pen) dot.style.background = penSwatch(pen);
+    }
+    for (const btn of this.flyout.querySelectorAll('.wb-gradient[data-gradient]')) {
+      btn.classList.toggle('active', ed.pen.inkGradient === btn.dataset.gradient);
+    }
+    // A custom colour means "no gradient": drop the ring from the palette too.
+    const picker = this.flyout.querySelector('.wb-picker');
+    if (picker) {
+      for (const sw of this.flyout.querySelectorAll('.wb-swatch')) sw.classList.remove('active');
+    }
+  }
+
   /** Re-render one page's preview (drops the snapshot, repaints if on screen). */
   invalidateThumb(index) {
     this.thumbCache?.delete(this.thumbKey(index));
@@ -655,6 +681,49 @@ export class UI {
     this.flyoutAnchor = null;
   }
 
+  /**
+   * One colour control: the caller's palette, plus a full-spectrum picker that
+   * unfolds underneath it.
+   *
+   * `onPick` fires for a palette click, `onLive` while the picker is being
+   * dragged (so the canvas can follow along) and `onCommit` when the value
+   * settles — which is where a single undo step belongs.  `onLive`/`onCommit`
+   * default to `onPick` for settings that are not undoable at all (pen colour).
+   */
+  colorField({
+    label = '颜色', palette = [], current = '#FF000000', cols = 5, alpha = null,
+    allowAlpha = false, onPick, onLive = null, onCommit = null,
+  }) {
+    const argbOf = (hex) => hexToArgb(hex, alpha == null ? argbAlpha(current) : alpha);
+    const swatchRow = this.swatches(palette, current, (c) => onPick(c), { alpha: alpha ?? argbAlpha(current), cols });
+    const holder = el('div', { class: 'wb-color-custom' });
+    let picker = null;
+    const toggle = el('button', {
+      class: 'wb-toggle wb-color-toggle', type: 'button', text: '🎨 自定义颜色',
+      title: '展开全色系调色盘（色相 / 饱和度 / 明度 / 十六进制）',
+      onclick: () => {
+        if (picker) { picker.remove(); picker = null; toggle.classList.remove('active'); return; }
+        toggle.classList.add('active');
+        const start = argbToHex(current);
+        const clearRing = () => $$('.wb-swatch', swatchRow).forEach((n) => n.classList.remove('active'));
+        picker = colorPicker({
+          color: parseColor(current).a === 0 ? `#FF${start.slice(1)}` : current,
+          allowAlpha,
+          label: '自定义',
+          onInput: (argb) => { clearRing(); (onLive || onPick)(argb); },
+          onCommit: (argb) => { clearRing(); (onCommit || onPick)(argb); },
+        });
+        holder.append(picker);
+      },
+    });
+    return el('div', { class: 'wb-field' },
+      label ? el('div', { class: 'wb-flyout-label', text: label }) : null,
+      swatchRow,
+      el('div', { class: 'wb-row' }, toggle),
+      holder,
+    );
+  }
+
   swatches(colors, current, onPick, { alpha = 255, cols = 5 } = {}) {
     const grid = el('div', { class: 'wb-swatches' });
     grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
@@ -697,7 +766,6 @@ export class UI {
   openPenFlyout(anchor, toggle = true) {
     if (toggle && this.flyoutAnchor === anchor) return this.closeFlyout();
     const ed = this.editor;
-    const cur = ed.pen.color.replace(/^#..(.{6})$/, '#FF$1');
     const penRow = el('div', { class: 'wb-row wb-penslots' });
     ed.pens.forEach((p, i) => {
       penRow.append(el('button', {
@@ -713,8 +781,8 @@ export class UI {
       },
         el('span', { class: 'wb-penslot-num', text: String(i + 1) }),
         el('span', {
-          class: 'wb-penslot-dot',
-          style: { background: p.inkGradient ? 'linear-gradient(90deg,#D09734,#3EA03D,#40A3AD)' : argbToHex(p.color) },
+          class: 'wb-penslot-dot', dataset: { penDot: String(i) },
+          style: { background: penSwatch(p) },
         }),
       ));
     });
@@ -722,21 +790,31 @@ export class UI {
       el('div', { class: 'wb-flyout-label', text: '笔（3 支可分别自定义）' }), penRow,
       this.slider('粗细', ed.pen.width, 1, 20, 1, (v) => { ed.pen.width = v; }, (v) => String(Math.round(v))),
       this.slider('不透明度', ed.pen.opacity * 100, 0, 100, 5, (v) => { ed.pen.opacity = v / 100; }, (v) => String(Math.round(v))),
-      el('div', { class: 'wb-flyout-label', text: '颜色' }),
-      this.swatches(PALETTE.pen, ed.pen.color.toUpperCase(), (c) => {
-        ed.pen.color = c; ed.pen.inkGradient = null; ed.setTool('pen');
-      }, { cols: 5 }),
-      el('div', { class: 'wb-flyout-label', text: '渐变笔' }),
-      el('div', { class: 'wb-row' }, GRADIENT_PENS.map((g) => el('button', {
-        class: 'wb-gradient' + (ed.pen.inkGradient === (g.name === '彩虹' ? 'rainbow' : 'aurora') ? ' active' : ''),
-        type: 'button', title: g.name,
+      this.colorField({
+        label: '颜色',
+        palette: PALETTE.pen,
+        current: ed.pen.color.toUpperCase(),
+        cols: 5,
+        allowAlpha: false,
+        onPick: (c) => {
+          ed.pen.color = c; ed.pen.inkGradient = null; ed.setTool('pen');
+          this.syncPenIndicators();
+        },
+        onLive: (c) => {
+          ed.pen.color = c; ed.pen.inkGradient = null;
+          this.syncPenIndicators();
+        },
+      }),
+      el('div', { class: 'wb-flyout-label', text: `渐变笔（${GRADIENTS.length} 种，含 matplotlib 配色）` }),
+      el('div', { class: 'wb-gradientgrid' }, GRADIENTS.map((g) => el('button', {
+        class: 'wb-gradient' + (ed.pen.inkGradient === g.id ? ' active' : ''),
+        type: 'button', title: g.name, dataset: { gradient: g.id },
         style: { background: `linear-gradient(90deg, ${g.stops.join(',')})` },
-        onclick: (e) => {
-          ed.pen.inkGradient = g.name === '彩虹' ? 'rainbow' : 'aurora';
+        onclick: () => {
+          ed.pen.inkGradient = g.id;
           ed.pen.color = '#FF1F1F1F';
           ed.setTool('pen');
-          $$('.wb-gradient', e.currentTarget.parentElement).forEach((n) => n.classList.remove('active'));
-          e.currentTarget.classList.add('active');
+          this.syncPenIndicators();
         },
       }))),
       el('div', { class: 'wb-flyout-label', text: '箭头' }),
@@ -750,13 +828,6 @@ export class UI {
           e.currentTarget.classList.add('active');
         },
       }))),
-      el('div', { class: 'wb-row wb-swatchrow' },
-        el('input', {
-          type: 'color', value: cur, title: '自定义颜色 (拾色器)',
-          oninput: (e) => { ed.pen.color = hexToArgb(e.target.value.toUpperCase(), 0xFF); ed.pen.inkGradient = null; },
-        }),
-        el('span', { class: 'wb-hint', text: '自定义拾色器' }),
-      ),
       el('p', { class: 'wb-hint', text: '按住 Shift 可画出直线；打开直尺后沿尺边画线也能得到直线。' }),
     );
     this.openFlyout(anchor, content, { title: '笔' });
@@ -781,10 +852,16 @@ export class UI {
         },
       })),
       el('p', { class: 'wb-hint', text: '关闭时为自由手绘（平头）；开启后拉出直线高亮，两端自动补成半圆。' }),
-      el('div', { class: 'wb-flyout-label', text: '颜色' }),
-      this.swatches(PALETTE.highlighter, ed.highlighter.color.toUpperCase(), (c) => {
-        ed.highlighter.color = c; ed.setTool('highlighter');
-      }, { cols: 5 }),
+      this.colorField({
+        label: '颜色',
+        palette: PALETTE.highlighter,
+        current: ed.highlighter.color.toUpperCase(),
+        cols: 5,
+        alpha: 0x5A,
+        allowAlpha: false,
+        onPick: (c) => { ed.highlighter.color = c; ed.setTool('highlighter'); },
+        onLive: (c) => { ed.highlighter.color = c; },
+      }),
       el('p', { class: 'wb-hint', text: '荧光笔半透明，用来描出下方的文字或图形。' }),
     );
     this.openFlyout(anchor, content, { title: '荧光笔' });
@@ -818,9 +895,16 @@ export class UI {
       [T.HEXAGON, '六边形', {}],
       [T.STAR, '五角星', {}],
     ];
+    const curves = [
+      ['parabola', '抛物线'],
+      ['hyperbola', '双曲线'],
+      ['sine', '正弦波'],
+      ['cubic', '三次曲线'],
+    ];
     const grid = el('div', { class: 'wb-shapegrid' });
     const apply = (kind, opts) => {
       ed.shapeKind = kind;
+      ed.shapeCurve = opts.curve || null;
       ed.shapeForce = opts.force || null;
       ed.shapeStyle.rounded = !!opts.rounded;
       ed.shapeStyle.dash = !!opts.dash;
@@ -829,7 +913,8 @@ export class UI {
       this.syncTools();
     };
     for (const [kind, label, opts] of shapes) {
-      const active = ed.shapeKind === kind && !!ed.shapeStyle.rounded === !!opts.rounded && !!ed.shapeStyle.dash === !!opts.dash;
+      const active = ed.shapeKind === kind && (ed.shapeCurve || null) === (opts.curve || null)
+        && !!ed.shapeStyle.rounded === !!opts.rounded && !!ed.shapeStyle.dash === !!opts.dash;
       const b = el('button', {
         class: 'wb-shapebtn' + (active ? ' active' : ''), title: label, type: 'button',
         html: shapeIcon(kind, opts),
@@ -847,14 +932,65 @@ export class UI {
     });
     const fillToggle = el('button', {
       class: 'wb-toggle' + (ed.shapeStyle.filled ? ' active' : ''), type: 'button', text: '填充',
-      onclick: (e) => { ed.shapeStyle.filled = !ed.shapeStyle.filled; e.currentTarget.classList.toggle('active', ed.shapeStyle.filled); },
+      onclick: (e) => {
+        ed.shapeStyle.filled = !ed.shapeStyle.filled;
+        e.currentTarget.classList.toggle('active', ed.shapeStyle.filled);
+        // the fill colour control only exists while filling is on
+        const anchor = this.flyoutAnchor;
+        if (anchor) this.openShapeFlyout(anchor);
+      },
     });
+    const curveGrid = el('div', { class: 'wb-shapegrid' });
+    for (const [curve, label] of curves) {
+      const active = ed.shapeKind === 'curve' && ed.shapeCurve === curve;
+      const b = el('button', {
+        class: 'wb-shapebtn' + (active ? ' active' : ''), title: label, type: 'button',
+        dataset: { curve },
+        html: shapeIcon('curve', { curve }),
+        onclick: () => {
+          apply('curve', { curve });
+          $$('.wb-shapebtn', curveGrid).forEach((n) => n.classList.remove('active'));
+          $$('.wb-shapebtn', grid).forEach((n) => n.classList.remove('active'));
+          b.classList.add('active');
+        },
+      });
+      curveGrid.append(b);
+    }
+    const fitBtn = el('button', {
+      class: 'wb-shapebtn' + (ed.tool === 'curvefit' ? ' active' : ''), type: 'button', title: '任意画 → 高次曲线拟合',
+      dataset: { curve: 'fit' },
+      html: shapeIcon('curve', { curve: 'fit' }),
+      onclick: () => {
+        ed.setTool('curvefit');
+        this.syncTools();
+        this.closeFlyout();
+        this.toast('随意画一条线，松手后会拟合成一条高次曲线');
+      },
+    });
+    curveGrid.append(fitBtn);
     const content = el('div', { class: 'wb-flyout-body' },
       el('div', { class: 'wb-flyout-label', text: '形状与线条' }), grid,
-      el('div', { class: 'wb-flyout-label', text: '边框颜色' }),
-      this.swatches(PALETTE.pen.slice(0, 15), ed.shapeStyle.stroke, (c) => { ed.shapeStyle.stroke = c; }, { cols: 5 }),
+      el('div', { class: 'wb-flyout-label', text: '曲线（拖出一个范围，曲线自动铺满）' }), curveGrid,
+      this.colorField({
+        label: '边框颜色',
+        palette: PALETTE.pen.slice(0, 15),
+        current: ed.shapeStyle.stroke,
+        cols: 5,
+        allowAlpha: false,
+        onPick: (c) => { ed.shapeStyle.stroke = c; },
+        onLive: (c) => { ed.shapeStyle.stroke = c; },
+      }),
       this.slider('边框粗细', ed.shapeStyle.width, 0.8, 12, 0.2, (v) => { ed.shapeStyle.width = v; }, (v) => v.toFixed(1)),
       el('div', { class: 'wb-row' }, dashToggle, fillToggle),
+      ed.shapeStyle.filled ? this.colorField({
+        label: '填充颜色',
+        palette: PALETTE.note,
+        current: ed.shapeStyle.fill || ed.shapeStyle.stroke,
+        cols: 6,
+        allowAlpha: true,
+        onPick: (c) => { ed.shapeStyle.fill = c; },
+        onLive: (c) => { ed.shapeStyle.fill = c; },
+      }) : null,
       el('p', { class: 'wb-hint', text: '拖动绘制；按住 Shift 可画正方形 / 正圆 / 45° 直线。' }),
     );
     this.openFlyout(anchor, content, { title: '形状' });
@@ -898,11 +1034,21 @@ export class UI {
       }));
     }
     const content = el('div', { class: 'wb-flyout-body' },
-      el('div', { class: 'wb-flyout-label', text: '颜色' }),
-      this.swatches(PALETTE.text, ed.textStyle.color, (c) => {
-        ed.textStyle.color = c;
-        applyToSelectionUI(ed, (el2) => { el2.textColor = c; });
-      }, { cols: 5 }),
+      this.colorField({
+        label: '颜色',
+        palette: PALETTE.text,
+        current: ed.textStyle.color,
+        cols: 5,
+        allowAlpha: false,
+        onPick: (c) => {
+          ed.textStyle.color = c;
+          applyToSelectionUI(ed, (el2) => { el2.textColor = c; });
+        },
+        onLive: (c) => {
+          ed.textStyle.color = c;
+          applyToSelectionUI(ed, (el2) => { el2.textColor = c; });
+        },
+      }),
       el('div', { class: 'wb-flyout-label', text: '字号' }), sizeRow,
       el('div', { class: 'wb-flyout-label', text: '样式' }),
       el('div', { class: 'wb-row' },
@@ -973,15 +1119,29 @@ export class UI {
     };
 
     // The palette expresses a hue only: each note keeps the transparency it
-    // already had (the same rule the action bar's colour picker uses).
-    const colorRow = this.swatches(PALETTE.note, curColor, (color) => {
-      const hex = argbToHex(color);
-      ed.noteStyle.color = hexToArgb(hex, argbAlpha(ed.noteStyle.color));
-      apply((e) => { e.color = hexToArgb(hex, argbAlpha(e.color)); });
-    }, { cols: 6 });
+    // already had (the same rule the action bar's colour picker uses).  The
+    // spectrum picker is the one place that can change the alpha as well, so it
+    // applies live and commits once, like the sliders below.
+    const paint = (color, alpha) => {
+      ed.noteStyle.color = hexToArgb(argbToHex(color), alpha == null ? argbAlpha(ed.noteStyle.color) : alpha);
+      applyLive((e) => {
+        e.color = hexToArgb(argbToHex(color), alpha == null ? argbAlpha(e.color) : alpha);
+      });
+    };
+    const colorRow = this.colorField({
+      label: '便签颜色',
+      palette: PALETTE.note,
+      current: curColor,
+      cols: 6,
+      allowAlpha: true,
+      // A palette click is a complete edit on its own, so it commits; dragging
+      // in the spectrum paints live and commits once on release.
+      onPick: (color) => { paint(color, null); commitPending(); },
+      onLive: (color) => paint(color, null),
+      onCommit: (color) => { paint(color, parseColor(color).a); commitPending(); },
+    });
 
     return el('div', { class: 'wb-flyout-body' },
-      el('div', { class: 'wb-flyout-label', text: '便签颜色' }),
       colorRow,
       el('div', { class: 'wb-flyout-label', text: '不透明度' }),
       this.slider('透明度', curAlpha, 10, 100, 5, (v) => {
@@ -1036,6 +1196,7 @@ export class UI {
       row('image', '插入图片', () => this.app.pickImage()),
       row('reaction', '反应', () => { ed.setTool('reaction'); this.syncTools(); }),
       row('wand', '墨迹转形状 (Alt+B)', () => this.app.beautify()),
+      row('curve', '曲线拟合所选墨迹（高次曲线）', () => this.app.fitSelectionCurves()),
       row('pages', '页面面板', () => this.togglePages(true)),
       row('plus', '在当前页之前新建画纸 (Ctrl+Alt+P)', () => { ed.addPageBefore(); this.syncPages(); }),
       row('plus', '在当前页之后新建画纸 (Ctrl+Alt+N)', () => { ed.addPageAfter(); this.syncPages(); }),
@@ -1071,26 +1232,18 @@ export class UI {
       row.append(b);
     }
     const colors = ['#FFFFFF', '#FAF9F8', '#F3F2F1', '#FFF8E7', '#EAF3FB', '#1B1A19'];
-    const colorRow = el('div', { class: 'wb-row' });
-    for (const c of colors) {
-      colorRow.append(el('button', {
-        class: 'wb-swatch' + (argbToHex(ed.doc.backgroundColor).toUpperCase() === c ? ' active' : ''),
-        type: 'button', style: { background: c },
-        onclick: () => {
-          ed.doc.backgroundColor = hexToArgb(c.slice(1), 0xFF);
-          ed.invalidate();
-          $$('.wb-swatch', colorRow).forEach((n) => n.classList.remove('active'));
-        },
-      }));
-    }
     const content = el('div', { class: 'wb-flyout-body' },
       el('div', { class: 'wb-flyout-label', text: '背景样式' }), row,
       this.slider('网格间距', ed.background.spacing, 10, 80, 5, (v) => { ed.background.spacing = v; ed.invalidate(); }),
-      el('div', { class: 'wb-flyout-label', text: '画布颜色' }), colorRow,
-      el('div', { class: 'wb-row' }, el('input', {
-        type: 'color', value: argbToHex(ed.doc.backgroundColor),
-        oninput: (e) => { ed.doc.backgroundColor = hexToArgb(e.target.value.slice(1).toUpperCase(), 0xFF); ed.invalidate(); },
-      })),
+      this.colorField({
+        label: '画布颜色',
+        palette: colors.map((c, i) => ({ name: `预设 ${i + 1}`, argb: hexToArgb(c.slice(1), 0xFF) })),
+        current: ed.doc.backgroundColor,
+        cols: 6,
+        allowAlpha: false,
+        onPick: (c) => { ed.doc.backgroundColor = c; ed.invalidate(); },
+        onLive: (c) => { ed.doc.backgroundColor = c; ed.invalidate(); },
+      }),
     );
     this.openFlyout(anchor, content, { title: '画布背景' });
   }
@@ -1343,10 +1496,27 @@ export class UI {
   }
 }
 
+/** CSS background for a pen slot: its gradient when it has one, else its colour. */
+function penSwatch(pen) {
+  if (pen?.inkGradient) {
+    const g = GRADIENTS.find((x) => x.id === pen.inkGradient) || GRADIENTS[0];
+    return `linear-gradient(90deg, ${g.stops.join(',')})`;
+  }
+  return argbToHex(pen?.color || '#FF1F1F1F');
+}
+
 function shapeIcon(kind, opts = {}) {
   const s = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">';
+  const CURVES = {
+    parabola: '<path d="M3 6c3 0 4.5 12 9 12s6-12 9-12"/>',
+    hyperbola: '<path d="M9 20c-2-1.5-3-4.5-3-8s1-6.5 3-8"/><path d="M15 4c2 1.5 3 4.5 3 8s-1 6.5-3 8"/>',
+    sine: '<path d="M3 12c2.5-6 5-6 7.5 0s5 6 7.5 0"/>',
+    cubic: '<path d="M3 19c4 0 5-14 9-14s5 14 9 14"/>',
+    fit: '<path d="M3 18c2-8 5 4 7-2s3-8 5-4 4 2 6-2" stroke-dasharray="2 2"/><path d="M3 16c3-2 6 1 9-1s6-3 9-1"/>',
+  };
   let body;
-  if (opts.dash) body = '<path d="M3 19L21 5" stroke-dasharray="3 2.5"/>';
+  if (CURVES[opts.curve]) body = CURVES[opts.curve];
+  else if (opts.dash) body = '<path d="M3 19L21 5" stroke-dasharray="3 2.5"/>';
   else {
     const map = {
       [T.LINE]: '<path d="M4 20L20 4"/>',

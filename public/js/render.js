@@ -8,7 +8,7 @@
 import { Rect, rectFromPoints, distToSegment } from './geometry.js';
 import { argbToRgba, clamp } from './util.js';
 import {
-  T, POLYGON_SHAPES, IS_OBJECT, elementPoints, localBounds,
+  T, POLYGON_SHAPES, IS_OBJECT, elementPoints, localBounds, gradientById,
   fontString, wrapText, LINE_HEIGHT, ellipsePointsFromRect, stickyCornerRadius,
 } from './elements.js';
 import { layoutRichText, drawRichLine } from './mathtext.js';
@@ -56,9 +56,7 @@ function pressureScale(pr, maxPr) {
 
 /** Multi-colour "Rainbow" / "Aurora" pen fills. */
 export function makeInkGradient(ctx, pts, kind) {
-  const stops = kind === 'aurora'
-    ? ['#583D71', '#546C9D', '#739CBD', '#7BBAC7', '#97CDCF', '#8CD1B5']
-    : ['#D09734', '#EFB73B', '#E6C245', '#82AE3E', '#3EA03D', '#23A46A', '#2F9794', '#40A3AD'];
+  const stops = gradientById(kind).stops;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const p of pts) {
     if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
@@ -518,7 +516,8 @@ export function drawElement(ctx, e, env) {
       const paint = e.inkGradient ? makeInkGradient(ctx, pts, e.inkGradient) : argbToRgba(e.stroke);
       strokeInk(ctx, pts, e.width || 1.6, paint, env, e);
       if (e.arrow && pts.length > 1) {
-        drawInkArrow(ctx, pts, e, e.inkGradient ? '#D09734' : argbToRgba(e.stroke));
+        const stops = e.inkGradient ? gradientById(e.inkGradient).stops : null;
+        drawInkArrow(ctx, pts, e, stops ? stops[stops.length - 1] : argbToRgba(e.stroke));
       }
       break;
     }
@@ -688,7 +687,10 @@ export class SceneRenderer {
     // 2. live layer + overlays in world space
     ctx.setTransform(k, 0, 0, k, -camera.x * k, -camera.y * k);
     const env = { images: s.images, zoom: camera.zoom, dpr, scale: k, editing: s.editing || null };
-    if (s.live) drawElement(ctx, s.live, env);
+    // The live layer is normally one element, but a shape can be a group (the
+    // two branches of a hyperbola), so accept both.
+    if (Array.isArray(s.live)) { for (const e of s.live) drawElement(ctx, e, env); }
+    else if (s.live) drawElement(ctx, s.live, env);
     if (s.overlay) { ctx.save(); s.overlay(ctx, env); ctx.restore(); }
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);

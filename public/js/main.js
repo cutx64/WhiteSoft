@@ -15,7 +15,7 @@ import {
   planLocalCompaction,
 } from './document.js';
 import { T } from './elements.js';
-import { beautifySelection } from './tools.js';
+import { beautifySelection, fitSelectionToCurves } from './tools.js';
 import {
   getPref, setPref, autoSaveLabel, recentFiles, rememberFile, clearRecentFiles, relativeTime,
 } from './prefs.js';
@@ -1009,6 +1009,19 @@ class App {
   }
 
   /** Delete every selected object — ink, shapes, text, notes, tables, images. */
+  /** 曲线拟合: replace the selected ink with the smooth curve through it. */
+  fitSelectionCurves() {
+    const ed = this.editor;
+    const n = fitSelectionToCurves(ed);
+    if (!n) {
+      const hasInk = [...ed.selection].some((e) => e.type === T.INK || e.type === T.HIGHLIGHTER);
+      this.ui.toast(hasInk ? '这些墨迹太短或太乱，拟合不出曲线' : '请先选中要拟合的墨迹', 'warn', 2600);
+      return 0;
+    }
+    this.ui.toast(`已把 ${n} 条墨迹拟合成高次曲线（Ctrl+Z 可撤销）`, 'ok', 2200);
+    return n;
+  }
+
   deleteSelection() {
     const ed = this.editor;
     const n = ed.selection.size;

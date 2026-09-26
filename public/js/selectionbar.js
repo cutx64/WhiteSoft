@@ -8,6 +8,7 @@
  */
 import { el, $, $$, argbToHex, argbToRgba, clamp } from './util.js';
 import { T, PALETTE, IS_OBJECT } from './elements.js';
+import { colorPicker } from './colorpicker.js';
 
 const ICON = {
   color: '<circle cx="12" cy="12" r="8"/><path d="M12 4v16"/>',
@@ -219,12 +220,40 @@ export class SelectionBar {
         },
       }));
     }
+
+    // The full-spectrum picker paints the selection live and writes a single
+    // undo step when the value settles — dragging must not fill the history.
+    let pending = null;
+    const paint = (argb) => {
+      if (!pending) pending = ed.snapshot();
+      ed.applySelectionColor(argb, { snapshot: false });
+      ed.invalidate();
+    };
+    const commit = (argb) => {
+      paint(argb);
+      if (pending) {
+        const snap = pending;
+        pending = null;
+        ed.commitSnapshot(snap, '修改颜色');
+      }
+      const n = ed.selection.size;
+      if (n) this.ui.toast(`已修改 ${n} 个对象的颜色`, 'ok', 1400);
+    };
     const sel = [...ed.selection];
     const noColor = sel.length > 0 && sel.every((e) => IS_OBJECT.has(e.type) && e.type !== T.TEXT && e.type !== T.STICKY && e.type !== T.TABLE);
     const pop = el('div', { class: 'wb-selpopover' },
       el('div', { class: 'wb-flyout-label', text: label }),
       grid,
-      noColor ? el('p', { class: 'wb-hint', text: '所选对象（图片/反应）不支持改颜色。' }) : null,
+      noColor
+        ? el('p', { class: 'wb-hint', text: '所选对象（图片/反应）不支持改颜色。' })
+        : el('div', { class: 'wb-color-custom' }, colorPicker({
+          color: cur || '#FF000000',
+          allowAlpha: false,
+          label: '自定义',
+          onInput: (argb) => paint(argb),
+          onCommit: (argb) => commit(argb),
+        })),
+      el('p', { class: 'wb-hint', text: '调色盘可拖动取色，也支持输入十六进制；拖完只记一步撤销。' }),
     );
     this.openPopover(pop);
     void anchor;

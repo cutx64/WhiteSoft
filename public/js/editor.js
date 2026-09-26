@@ -48,6 +48,8 @@ export class Editor {
     this.tool = 'pen';
     this.prevTool = 'pen';
     this.shapeKind = T.RECT;
+    /** Which curve family the 'curve' shape kind draws (see curvePointsFor). */
+    this.shapeCurve = 'parabola';
     this.selection = new Set();
     this.live = null;
     this.overlayExtra = null;
@@ -458,6 +460,37 @@ export class Editor {
     return e;
   }
 
+  /**
+   * Add several elements as one shape (a hyperbola is two branches): a single
+   * history entry, one undo, and all of them selected together.
+   */
+  addElements(list, { select = false, record = true, label = '添加' } = {}) {
+    const items = (list || []).filter(Boolean);
+    if (!items.length) return [];
+    if (items.length === 1) return [this.addElement(items[0], { select, record, label })];
+    for (const e of items) this.page.elements.push(e);
+    if (record) {
+      this.history.push(label,
+        () => {
+          for (const e of items) {
+            const i = this.page.elements.indexOf(e);
+            if (i >= 0) this.page.elements.splice(i, 1);
+            this.selection.delete(e);
+          }
+        },
+        () => { for (const e of items) this.page.elements.push(e); });
+    }
+    if (select) {
+      this.selection.clear();
+      for (const e of items) this.selection.add(e);
+      this.onSelectionChange?.();
+    }
+    this.invalidate();
+    this.onContentChange?.();
+    this.onChange?.();
+    return items;
+  }
+
   removeElements(list, label = '删除') {
     const items = list.filter((e) => this.page.elements.includes(e));
     if (!items.length) return;
@@ -543,10 +576,16 @@ export class Editor {
     return items.length;
   }
 
-  /** Change the primary colour of every selected element. */
-  applySelectionColor(argb) {
+  /**
+   * Change the primary colour of every selected element.
+   *
+   * `snapshot: false` paints without writing a history entry, which is what a
+   * live colour-picker drag needs: the caller keeps the "before" snapshot and
+   * commits it once when the value settles.
+   */
+  applySelectionColor(argb, { snapshot = true } = {}) {
     if (!this.selection.size) return 0;
-    const before = this.snapshot();
+    const before = snapshot ? this.snapshot() : null;
     let n = 0;
     for (const e of this.selection) {
       switch (e.type) {
@@ -577,7 +616,7 @@ export class Editor {
           break;
       }
     }
-    if (n) this.commitSnapshot(before, '修改颜色');
+    if (n && before) this.commitSnapshot(before, '修改颜色');
     return n;
   }
 
