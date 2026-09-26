@@ -17,6 +17,7 @@ import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startFixtureServer, openFixture } from './lib/local.mjs';
 
 const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = path.join(__dirname, 'test', 'shots');
@@ -25,6 +26,8 @@ fs.mkdirSync(SHOTS, { recursive: true });
 const argv = process.argv.slice(2);
 const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const CHROME = arg('chrome', path.join(__dirname, '.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chrome'));
+const URL_BASE = arg('url', 'http://127.0.0.1:8787/');
+const FIXTURE_DIR = path.resolve(arg('fixtures', '/home/cutx64/Workspace/Maths'));
 
 const profileDir = path.join(__dirname, '.chrome-profile-round2');
 fs.rmSync(profileDir, { recursive: true, force: true });
@@ -54,7 +57,8 @@ await page.setCacheEnabled(false);
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
 
-await page.goto('http://127.0.0.1:8787/', { waitUntil: 'domcontentloaded' });
+const fixtures = await startFixtureServer(FIXTURE_DIR);
+await page.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
 await sleep(1500);
 
 const box = await page.$eval('#wb-canvas', (c) => {
@@ -67,25 +71,16 @@ const C = (dx, dy) => [box.x + dx, box.y + dy];
  * 1. Open through the in-app dialog
  * ---------------------------------------------------------------- */
 console.log('\n[1] 通过“打开”对话框载入');
-// 「打开」现在先问来源：本机文件，还是最近使用 / 工作区里的文件。
+// 「打开」先问来源：本机文件选择，还是最近使用的文件。
 await page.evaluate(() => window.app.showOpenDialog());
 await sleep(600);
-const choseRecent = await page.evaluate(() => {
-  const row = [...document.querySelectorAll('.wb-filerow')]
-    .find((r) => r.textContent.includes('最近使用的文件'));
-  if (!row) return false;
-  row.click();
-  return true;
-});
-check('打开对话框提供「最近使用的文件」分支', choseRecent === true, String(choseRecent));
-await sleep(900);
-const dialogOk = await page.evaluate(() => {
-  const rows = [...document.querySelectorAll('.wb-filerow')];
-  const target = rows.find((r) => r.textContent.includes('Al-jabr-2.note'));
-  if (target) { target.click(); return true; }
-  return rows.length;
-});
-check('最近使用 / 工作区列表里列出 .note 文件', dialogOk === true, String(dialogOk));
+const branches = await page.evaluate(() => [...document.querySelectorAll('.wb-filerow')].map((r) => r.textContent.trim()));
+check('打开对话框提供「本地文件」与「最近使用的文件」两个分支',
+  branches.length === 2 && branches[1].includes('最近使用的文件'), JSON.stringify(branches));
+await page.evaluate(() => window.app.ui.closeDialog());
+
+// 真正打开样例：把它当成本机文件交给页面（测试只读地提供一份副本）
+await openFixture(page, fixtures.url('Al-jabr-2.note'), { name: 'Al-jabr-2.note' });
 await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
 await sleep(1500);
 const opened = await page.evaluate(() => ({
@@ -481,6 +476,7 @@ check('拖入时显示投放提示', dropOk === true);
 
 await page.screenshot({ path: path.join(SHOTS, 'r2-final.png') });
 await browser.close();
+await fixtures.close();
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n===== ${results.length - failed.length}/${results.length} 通过 =====`);

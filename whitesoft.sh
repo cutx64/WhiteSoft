@@ -6,8 +6,8 @@
 #   ./whitesoft.sh --open          启动后自动打开浏览器
 #   ./whitesoft.sh --port 9000     指定端口（默认就是 8787）
 #   ./whitesoft.sh --auto-port     端口被占用时自动往后找一个空闲端口
-#   ./whitesoft.sh --root ~/notes  指定工作区目录（存放 .note / .pdf）
 #
+# 白板文件由浏览器直接读写，服务端只托管界面，所以不需要指定任何目录。
 # 脚本就在仓库根目录，可以从任意工作目录调用：
 #   /path/to/WhiteSoft/whitesoft.sh
 #
@@ -23,7 +23,6 @@ SERVER="$APP_DIR/server.mjs"
 
 PORT="${PORT:-8787}"
 HOST="127.0.0.1"
-ROOT=""
 OPEN=0
 AUTO_PORT=0
 EXTRA=()
@@ -36,7 +35,6 @@ usage() {
 选项：
   -p, --port <n>     监听端口（默认 8787，也可用环境变量 PORT）
   -H, --host <addr>  监听地址（默认 127.0.0.1）
-  -r, --root <dir>   工作区目录（默认本仓库的上一级目录）
       --open         启动后自动打开默认浏览器
       --auto-port    端口被占用时自动顺延到下一个空闲端口
   -h, --help         显示本帮助
@@ -50,8 +48,6 @@ while [ $# -gt 0 ]; do
     --port=*) PORT="${1#*=}"; shift ;;
     -H|--host) HOST="${2:?--host 需要一个地址}"; shift 2 ;;
     --host=*) HOST="${1#*=}"; shift ;;
-    -r|--root) ROOT="${2:?--root 需要一个目录}"; shift 2 ;;
-    --root=*) ROOT="${1#*=}"; shift ;;
     --open) OPEN=1; shift ;;
     --auto-port) AUTO_PORT=1; shift ;;
     --) shift; EXTRA+=("$@"); break ;;
@@ -66,11 +62,6 @@ command -v node >/dev/null 2>&1 || die "找不到 node，请先安装 Node.js 18
 node -e 'const m=+process.versions.node.split(".")[0]; process.exit(m>=18?0:1)' \
   || die "Node.js 版本过低（当前 $(node -v)），需要 18 或更高。"
 [ -f "$SERVER" ] || die "找不到服务端文件：$SERVER"
-
-# 默认工作区是仓库的上一级，也就是存放 .note / .pdf 的目录
-if [ -z "$ROOT" ]; then ROOT="$(cd "$APP_DIR/.." && pwd)"; fi
-[ -d "$ROOT" ] || die "工作区目录不存在：$ROOT"
-ROOT="$(cd "$ROOT" && pwd)"
 
 # --- 端口 -----------------------------------------------------------------
 # 端口是否已被占用。整个探测放在子 shell 里：即使 exec 打开 /dev/tcp 失败，
@@ -99,19 +90,10 @@ fi
 URL="http://${HOST}:${PORT}/"
 
 # --- 启动横幅 -------------------------------------------------------------
-NOTES=()
-while IFS= read -r -d '' f; do NOTES+=("${f#"$ROOT"/}"); done \
-  < <(find "$ROOT" -maxdepth 2 -name '*.note' -not -path '*/.*' -print0 2>/dev/null | sort -z)
-
 printf '\n\033[1m%s\033[0m — 本地白板\n' "$APP_NAME"
 printf '%s\n' '──────────────────────────────────────────────'
 printf '界面地址 : \033[36m%s\033[0m\n' "$URL"
-printf '工作区   : %s\n' "$ROOT"
-if [ "${#NOTES[@]}" -gt 0 ]; then
-  printf '发现白板 : %s\n' "$(printf '%s, ' "${NOTES[@]}" | sed 's/, $//')"
-else
-  printf '发现白板 : （该目录下暂无 .note 文件，可用「导入 PDF」新建）\n'
-fi
+printf '打开白板 : 界面里用「打开」选择本机的 .note / .pdf（文件不会被复制或上传）\n'
 printf '停止服务 : Ctrl+C\n'
 printf '%s\n\n' '──────────────────────────────────────────────'
 
@@ -123,4 +105,4 @@ if [ "$OPEN" = "1" ]; then
 fi
 
 cd "$APP_DIR"
-exec node "$SERVER" --port "$PORT" --host "$HOST" --root "$ROOT" ${EXTRA[@]+"${EXTRA[@]}"}
+exec node "$SERVER" --port "$PORT" --host "$HOST" ${EXTRA[@]+"${EXTRA[@]}"}

@@ -42,7 +42,15 @@ function tx(mode, fn) {
       reject(err);
       return;
     }
-    t.oncomplete = () => { db.close(); resolve(result?.result ?? result); };
+    t.oncomplete = () => {
+      db.close();
+      // `store.get(id)` resolves to `request.result`, which is *undefined* for a
+      // key that is not there — falling back to the request object itself made
+      // `loadHandle` hand out something that merely looked like a handle, and
+      // "please pick that file again" turned into "handle.getFile is not a
+      // function".
+      resolve(result && typeof result === 'object' && 'result' in result ? result.result : result);
+    };
     t.onerror = () => { db.close(); reject(t.error); };
     t.onabort = () => { db.close(); reject(t.error || new Error('IndexedDB 事务中止')); };
   }));

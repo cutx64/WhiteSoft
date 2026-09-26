@@ -5,12 +5,18 @@
  * .note archive, checks the renderer, exercises the tools and captures
  * screenshots into test/shots/.
  *
- * Usage:  node test/smoke.mjs [--note Al-jabr-1.note] [--page 3] [--headed]
+ * The board is a real file now: the sample is served read-only over HTTP by a
+ * fixture server and handed to the page as a `File` (see test/lib/local.mjs),
+ * which is the same path a dragged-in board takes.
+ *
+ * Usage:  node test/smoke.mjs [--url http://127.0.0.1:8787/] [--note <path>]
+ *                             [--page 3] [--headed] [--chrome <path>]
  */
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startFixtureServer, openFixture } from './lib/local.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SHOTS = path.join(__dirname, 'shots');
@@ -22,10 +28,25 @@ const arg = (n, d) => {
   return i >= 0 && argv[i + 1] ? argv[i + 1] : d;
 };
 const URL_BASE = arg('url', 'http://127.0.0.1:8787/');
-const NOTE = arg('note', 'Al-jabr-1.note');
 const PAGE = Number(arg('page', 3));
 const HEADED = argv.includes('--headed');
-const CHROME = arg('chrome', '/snap/bin/chromium');
+const CHROME = arg('chrome', path.join(__dirname, '..', '.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chrome'));
+
+/** `--note` is a path on disk; a bare file name is looked up in the usual spots. */
+function resolveNote(given = 'Al-jabr-1.note') {
+  const name = path.basename(given);
+  const candidates = [
+    path.resolve(given),
+    path.join(__dirname, '..', name),
+    path.join(__dirname, '..', '.tmp-boards', name),
+    path.join(process.cwd(), name),
+    path.join('/home/cutx64/Workspace/Maths', name),
+  ];
+  for (const c of candidates) { try { if (fs.statSync(c).isFile()) return c; } catch { /* keep looking */ } }
+  console.error(`找不到样例白板：${given}\n请用 --note <path/to/board.note> 指定一个 .note 文件。`);
+  process.exit(1);
+}
+const NOTE = resolveNote(arg('note', 'Al-jabr-1.note'));
 
 const logs = [];
 const errors = [];
@@ -42,6 +63,7 @@ async function main() {
     executablePath: CHROME,
     headless: HEADED ? false : 'new',
     userDataDir: profileDir,
+    protocolTimeout: 600000,
     env: {
       ...process.env,
       HOME: chromeHome,
@@ -88,13 +110,16 @@ async function main() {
   console.log('  title:', title);
 
   // --- open a .note -------------------------------------------------
-  console.log('→ opening', NOTE);
-  await page.evaluate((n) => window.app.loadNote(n, { confirm: false }), NOTE);
+  console.log('→ opening', NOTE, '(served read-only)');
+  const fixtures = await startFixtureServer(path.dirname(NOTE));
+  const openBoard = () => openFixture(page, fixtures.url(path.basename(NOTE)), { writable: false });
+  const opened = await openBoard();
   await page.waitForFunction(
     () => window.app.editor.doc.pages.length > 1,
     { timeout: 120000 },
   );
   await sleep(2500);
+  console.log('  opened:', JSON.stringify(opened));
 
   const info = await page.evaluate(() => {
     const ed = window.app.editor;
@@ -197,7 +222,7 @@ async function main() {
   await sleep(800);
   await shot(page, '08-fit');
 
-  await page.evaluate((n) => window.app.loadNote(n, { confirm: false }), NOTE);
+  await openBoard();
   await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
   await sleep(2000);
   const zoomed = await page.evaluate(() => {
@@ -218,6 +243,7 @@ async function main() {
   console.log('  export bitmap:', JSON.stringify(png));
 
   // --- report -------------------------------------------------------
+  await fixtures.close();
   await browser.close();
 
   const report = { info, target, navWorks, afterDraw, afterObjects, afterUndo, png, errors };

@@ -9,12 +9,18 @@
  *   6. type an arbitrary zoom percentage into the bottom bar
  *   7. unsaved-changes confirmation before loading another PDF / .note
  *
- * Usage: node test/round3.mjs
+ * The sample boards are local files now: they are served by the test process
+ * and turned into real `File`s inside the page (test/lib/local.mjs).  Opening
+ * one goes through `app.openLocalFile()`, and 另存为 writes into an OPFS file
+ * whose bytes are then read back.
+ *
+ * Usage: node test/round3.mjs [--chrome <path>] [--url <base>] [--fixtures <dir>]
  */
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startFixtureServer, openFixture, chooseSaveTarget, readOpfs, resolveFixtureDir } from './lib/local.mjs';
 
 const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = path.join(__dirname, 'test', 'shots');
@@ -23,6 +29,17 @@ fs.mkdirSync(SHOTS, { recursive: true });
 const argv = process.argv.slice(2);
 const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const CHROME = arg('chrome', path.join(__dirname, '.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chrome'));
+const URL_BASE = arg('url', 'http://127.0.0.1:8787/');
+// These suites assert on two private sample boards (446 / 655 pages), which the
+// repository does not ship; point them at whatever directory holds them.
+const FIXTURE_DIR = resolveFixtureDir(arg('fixtures', ''), ['Al-jabr-1.note', 'Al-jabr-2.note']);
+if (!FIXTURE_DIR) {
+  console.error('找不到样例白板 Al-jabr-1.note / Al-jabr-2.note。\n'
+    + '请把这两个文件放进仓库的 .tmp-boards/，或用 --fixtures <目录> 指定它们所在的目录。');
+  process.exit(2);
+}
+const NOTE1 = path.join(FIXTURE_DIR, 'Al-jabr-1.note');
+const NOTE2 = path.join(FIXTURE_DIR, 'Al-jabr-2.note');
 
 const profileDir = path.join(__dirname, '.chrome-profile-round3');
 fs.rmSync(profileDir, { recursive: true, force: true });
@@ -35,6 +52,9 @@ function check(name, ok, detail = '') {
   results.push({ name, ok, detail });
   console.log(`${ok ? '  ✓' : '  ✗'} ${name}${detail ? ' — ' + detail : ''}`);
 }
+
+/** Serve the sample boards read-only over HTTP so the page can fetch them. */
+const fixtures = await startFixtureServer(FIXTURE_DIR);
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
@@ -52,7 +72,7 @@ await page.setCacheEnabled(false);
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
 
-await page.goto('http://127.0.0.1:8787/', { waitUntil: 'domcontentloaded' });
+await page.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
 await sleep(1500);
 
 const box = await page.$eval('#wb-canvas', (c) => {
@@ -80,12 +100,34 @@ async function canvasHash() {
   });
 }
 
+/** Wait until the PDF background of the open board has been rasterised. */
+const waitPdfBitmap = (timeout = 60000) => page.waitForFunction(() => {
+  const ed = window.app.editor;
+  return !!(ed._pdfPages && ed._pdfPages[0] && ed._pdfPages[0].bitmap);
+}, { timeout });
+
+/**
+ * Put a fixture into the page as a real `File` the app can open, without
+ * touching the browser's file system: this is the "user dragged a file in"
+ * case, and it is what the unsaved-changes prompts below are exercised with.
+ */
+async function stageFixture(url, name = null) {
+  return page.evaluate(async ({ url, name }) => {
+    const blob = await (await fetch(url)).blob();
+    const fileName = name || decodeURIComponent(url.split('/').pop());
+    window.__staged = new File([blob], fileName, { type: 'application/x-note' });
+    return { name: fileName, size: window.__staged.size };
+  }, { url, name });
+}
+
 /* ================================================================ *
  * 1. Immediate repaint on undo / redo / delete
  * ================================================================ */
 console.log('\n[1] 撤销 / 删除即时渲染');
-await page.evaluate(() => window.app.loadNote('Al-jabr-1.note', { confirm: false }));
+await page.evaluate(() => window.app.ui.closeDialog());
+await openFixture(page, fixtures.url('Al-jabr-1.note'));
 await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
+await waitPdfBitmap();
 await sleep(2000);
 await page.evaluate(() => {
   const ed = window.app.editor;
@@ -386,7 +428,7 @@ await page.screenshot({ path: path.join(SHOTS, 'r3-zoom.png') });
  * ================================================================ */
 console.log('\n[6b] 全局统一比例与默认 80%');
 // re-open the board so we observe the value it starts with
-await page.evaluate(() => window.app.loadNote('Al-jabr-1.note', { confirm: false }));
+await openFixture(page, fixtures.url('Al-jabr-1.note'));
 await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
 await sleep(1200);
 const defaultZoom = await page.evaluate(() => {
@@ -477,9 +519,13 @@ await sleep(300);
 const dirty = await page.evaluate(() => window.app.modified);
 check('编辑后标记为未保存', dirty === true, String(dirty));
 
-// start a load and inspect the dialog without resolving it
+// stage the second board, then start loading it and inspect the dialog without
+// resolving it
+await stageFixture(fixtures.url('Al-jabr-2.note'));
 const prompt = await page.evaluate(async () => {
-  const p = window.app.loadNote('Al-jabr-2.note');
+  const p = window.app.openLocalFile(window.__staged, { handle: null });
+  p.catch(() => {});
+  window.__pending = p;
   await new Promise((r) => setTimeout(r, 400));
   const dlg = document.querySelector('.wb-modal');
   const title = dlg ? dlg.querySelector('h3').textContent : null;
@@ -509,7 +555,7 @@ check('取消后保留当前白板',
 
 // discard actually loads
 const discarded = await page.evaluate(async () => {
-  const p = window.app.loadNote('Al-jabr-2.note');
+  const p = window.app.openLocalFile(window.__staged, { handle: null });
   await new Promise((r) => setTimeout(r, 400));
   const btn = [...document.querySelectorAll('.wb-modal button')].find((b) => b.textContent.trim() === '放弃更改');
   if (btn) btn.click();
@@ -520,8 +566,9 @@ const discarded = await page.evaluate(async () => {
 check('放弃更改后载入新白板', discarded.name === 'Al-jabr-2' && discarded.pages === 655, JSON.stringify(discarded));
 
 // a clean board loads without any prompt
+await stageFixture(fixtures.url('Al-jabr-1.note'));
 const clean = await page.evaluate(async () => {
-  const p = window.app.loadNote('Al-jabr-1.note');
+  const p = window.app.openLocalFile(window.__staged, { handle: null });
   await new Promise((r) => setTimeout(r, 400));
   const modal = !!document.querySelector('.wb-modal');
   await p;
@@ -535,9 +582,10 @@ const pdfGuard = await page.evaluate(async () => {
   ed.page.elements.push({ type: 400001, bounds: '80,80,100,100', color: '#FFFFE6A0', text: 'x', textColor: '#FF000000', fontSize: 18 });
   ed.onContentChange?.();
   await new Promise((r) => setTimeout(r, 200));
-  const res = await fetch('/api/note/document?path=' + encodeURIComponent('Al-jabr-1.note'));
-  const blob = await res.blob();
-  const file = new File([blob], 'x.pdf', { type: 'application/pdf' });
+  // the PDF the sample board embeds, read straight out of its local archive
+  const doc = ed.doc;
+  const bytes = doc._pdfBytes || await doc.localArchive.read('Resources/Document/' + doc.document.fileName);
+  const file = new File([bytes], 'x.pdf', { type: 'application/pdf' });
   const p = window.app.importPdfFile(file);
   await new Promise((r) => setTimeout(r, 500));
   const dlg = document.querySelector('.wb-modal');
@@ -554,26 +602,25 @@ check('导入 PDF 前同样确认', pdfGuard.buttons.includes('放弃更改'), J
  * 8. Save As keeps the original file untouched
  * ================================================================ */
 console.log('\n[8] 另存为不覆盖原件');
+// open the sample board for real, so it owns a writable handle and 另存为 has
+// an original file it must leave alone
+await openFixture(page, fixtures.url('Al-jabr-1.note'));
+const originalBefore = await readOpfs(page, 'Al-jabr-1.note');
+await chooseSaveTarget(page, 'saveas-copy.note');
 const saveAs = await page.evaluate(async () => {
-  const ed = window.app.editor;
-  const before = await (await fetch('/api/note/meta?path=' + encodeURIComponent('Al-jabr-1.note'))).json();
-  ed.doc.path = '.cache/saveas-copy.note';
-  ed.doc.sourcePath = 'Al-jabr-1.note';
-  await window.app.save();
+  const ok = await window.app.saveAs();
   await new Promise((r) => setTimeout(r, 1500));
-  const after = await (await fetch('/api/note/meta?path=' + encodeURIComponent('Al-jabr-1.note'))).json();
-  const copy = await (await fetch('/api/note/meta?path=' + encodeURIComponent('.cache/saveas-copy.note'))).json();
-  return {
-    originalSize: before.size, originalSizeAfter: after.size,
-    originalEntries: before.entryCount, copyEntries: copy.entryCount, copySize: copy.size,
-  };
+  return { ok, modified: window.app.modified, name: window.app.editor.doc.name };
 });
+const originalAfter = await readOpfs(page, 'Al-jabr-1.note');
+const copy = await readOpfs(page, 'saveas-copy.note');
 check('另存为不影响原文件',
-  saveAs.originalSize === saveAs.originalSizeAfter,
-  `${saveAs.originalSize} → ${saveAs.originalSizeAfter}`);
+  originalBefore.size === originalAfter.size,
+  `${originalBefore.size} → ${originalAfter.size}`);
 check('另存为的副本保留全部条目',
-  saveAs.copyEntries >= saveAs.originalEntries,
-  `${saveAs.originalEntries} → ${saveAs.copyEntries}`);
+  copy.entries.length >= originalBefore.entries.length,
+  `${originalBefore.entries.length} → ${copy.entries.length}`);
+if (saveAs.ok !== true || saveAs.modified !== false) console.log('   另存为状态:', JSON.stringify(saveAs));
 
 const saveAsUi = await page.evaluate(() => {
   const titles = [...document.querySelectorAll('.wb-titleactions .wb-btn')].map((b) => b.title);
@@ -583,6 +630,7 @@ check('标题栏有「另存为」按钮', saveAsUi);
 
 await page.screenshot({ path: path.join(SHOTS, 'r3-final.png') });
 await browser.close();
+await fixtures.close();
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n===== ${results.length - failed.length}/${results.length} 通过 =====`);

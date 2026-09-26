@@ -16,10 +16,11 @@ export class ResourceStore {
     this.images = new Map();
     /** @type {Map<string, {blob: Blob, url: string}>} */
     this.local = new Map();
+    /** @type {Map<string, Uint8Array>} raw bytes of the pasted files */
+    this.bytes = new Map();
     /** @type {Map<string, string>} fileName -> object URL for the session */
     this.urls = new Map();
-    this.notePath = null;
-    /** ZipReader of a `.note` opened from disk (no server copy involved). */
+    /** ZipReader of the `.note` the board was opened from. */
     this.archive = null;
     this.pending = new Map();
     this.onLoad = null;
@@ -32,20 +33,27 @@ export class ResourceStore {
    * session, which by then either live inside the saved `.note` or were
    * discarded together with the unsaved changes.
    */
-  setNote(path) {
+  setNote() {
     this.clear();            // also forgets a previously opened local archive
-    this.notePath = path;
     this.archive = null;
   }
 
   /**
-   * Take images from a `.note` read in the browser (opened from local disk).
-   * Entries are inflated on demand and turned into session object URLs, so a
-   * board with hundreds of images never loads them all up front.
+   * Take images from the `.note` the board was opened from.  Entries are
+   * inflated on demand and turned into session object URLs, so a board with
+   * hundreds of images never loads them all up front.
+   *
+   * Adopt a refreshed reader for the *same* board (after saving in place the
+   * file on disk changed, so the old snapshot can no longer be read).  Unlike
+   * `setLocalArchive` this keeps the bitmaps that are already decoded, so the
+   * canvas does not flicker back to placeholders.
    */
+  swapArchive(archive) {
+    this.archive = archive || null;
+  }
+
   setLocalArchive(archive) {
     this.clear();            // clear() drops the archive too, so set it after
-    this.notePath = null;
     this.archive = archive || null;
   }
 
@@ -59,6 +67,7 @@ export class ResourceStore {
     for (const url of this.urls.values()) URL.revokeObjectURL(url);
     this.urls.clear();
     this.local.clear();
+    this.bytes.clear();
     this.images.clear();
     this.pending.clear();
     this.archive = null;
@@ -66,12 +75,10 @@ export class ResourceStore {
 
   urlFor(fileName) {
     // A pasted file is addressable through its session object URL, which is
-    // only usable while it is still registered in `urls`; otherwise fall back
-    // to the copy inside the `.note` archive.
+    // only usable while it is still registered in `urls`; anything else comes
+    // out of the archive the board was opened from (see `#loadFromArchive`).
     const local = this.local.get(fileName);
-    if (local && this.urls.has(fileName)) return local.url;
-    if (!this.notePath) return null;
-    return `/api/note/entry?path=${encodeURIComponent(this.notePath)}&name=${encodeURIComponent('Resources/Images/' + fileName)}`;
+    return local && this.urls.has(fileName) ? local.url : null;
   }
 
   /** Synchronously fetch an already-decoded image (may be undefined). */
@@ -87,9 +94,16 @@ export class ResourceStore {
   load(fileName) {
     if (this.images.has(fileName)) return Promise.resolve(this.images.get(fileName));
     if (this.pending.has(fileName)) return this.pending.get(fileName);
-    if (this.archive) return this.#loadFromArchive(fileName);
+    // A file pasted during the session comes from memory (its object URL), even
+    // while an archive-backed board is open: it is *not* inside that `.note`
+    // yet.  Only when there is no such URL does the archive (or the server)
+    // supply the bytes — otherwise a freshly pasted image would be looked up in
+    // the archive, come back empty, and be placed with a guessed aspect ratio.
     const url = this.urlFor(fileName);
-    if (!url) return Promise.resolve(null);
+    if (!url) {
+      if (this.archive) return this.#loadFromArchive(fileName);
+      return Promise.resolve(null);
+    }
     const p = new Promise((resolve) => {
       const img = new Image();
       img.decoding = 'async';
@@ -149,6 +163,7 @@ export class ResourceStore {
     const blob = new Blob([bytes], { type: ext === 'jpg' || ext === 'jpeg' ? 'image/jpeg' : 'image/png' });
     const fileName = `${uuid()}.${ext}`;
     const url = URL.createObjectURL(blob);
+    this.bytes.set(fileName, bytes);
     this.local.set(fileName, { blob, url });
     this.urls.set(fileName, url);
     const img = new Image();
@@ -158,6 +173,16 @@ export class ResourceStore {
   }
 
   isNew(fileName) { return this.local.has(fileName); }
+
+  /** Raw bytes of the files added during this session (for a local save). */
+  newFilesBytes() {
+    const out = {};
+    for (const [name, rec] of this.local) {
+      if (this.bytes?.has(name)) out['Resources/Images/' + name] = this.bytes.get(name);
+    }
+    // Fall back to the cached blobs for older entries.
+    return out;
+  }
 
   async newFilesAsBase64() {
     const out = {};

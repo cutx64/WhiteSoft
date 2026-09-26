@@ -1,9 +1,9 @@
 // Package launcher runs the project's Node server as a child process.
 //
 // The desktop app deliberately does not reimplement the server: `server.mjs`
-// is the single source of truth for the `.note` API (including the
-// non-destructive save semantics), so the Go binary locates it, picks a free
-// port, starts it, waits until `/api/health` answers and opens a window on it.
+// hosts the UI and answers `/api/health` (every file operation happens in the
+// browser), so the Go binary locates it, picks a free port, starts it, waits
+// until it answers and opens a window on it.
 package launcher
 
 import (
@@ -35,8 +35,10 @@ const MinNodeMajor = 18
 const DefaultPort = 8787
 
 // Config describes how the server should be started.
+//
+// There is deliberately no directory here: the server only hosts the UI, and
+// every board is opened and saved by the browser against the user's own files.
 type Config struct {
-	Root     string    // workspace directory (where the .note files live)
 	ServerJS string    // path to server.mjs; empty = auto-detect
 	NodeBin  string    // node executable; empty = auto-detect
 	Port     int       // 0 = DefaultPort (falling back to a free one), else exact
@@ -50,7 +52,6 @@ type Server struct {
 	url    string
 	host   string
 	port   int
-	root   string
 	note   string
 	cmd    *exec.Cmd
 	cancel context.CancelFunc
@@ -66,9 +67,6 @@ func (s *Server) URL() string { return s.url }
 
 // Port is the TCP port the server listens on.
 func (s *Server) Port() int { return s.port }
-
-// Root is the workspace the server was given.
-func (s *Server) Root() string { return s.root }
 
 // Note explains a port that had to be moved aside ("" when the default was free).
 func (s *Server) Note() string { return s.note }
@@ -214,17 +212,6 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	root := cfg.Root
-	if root == "" {
-		root = filepath.Dir(filepath.Dir(serverJS)) // repo root by default
-	}
-	root, err = filepath.Abs(root)
-	if err != nil {
-		return nil, err
-	}
-	if st, err := os.Stat(root); err != nil || !st.IsDir() {
-		return nil, fmt.Errorf("工作区目录不存在：%s", root)
-	}
 	port := cfg.Port
 	var portNote string
 	if port == 0 {
@@ -245,14 +232,13 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 
 	runCtx, cancel := context.WithCancel(ctx)
 	cmd := exec.CommandContext(runCtx, nodeBin, serverJS,
-		"--port", strconv.Itoa(port), "--host", cfg.Host, "--root", root)
+		"--port", strconv.Itoa(port), "--host", cfg.Host)
 	cmd.Dir = filepath.Dir(serverJS)
 
 	s := &Server{
 		url:    fmt.Sprintf("http://%s:%d/", cfg.Host, port),
 		host:   cfg.Host,
 		port:   port,
-		root:   root,
 		note:   portNote,
 		cmd:    cmd,
 		cancel: cancel,

@@ -5,20 +5,46 @@
  * marquee-selecting, panning and zooming — on a light page and on the
  * heaviest page of the sample board.
  *
- *   node test/perf.mjs [--json]
+ * The board is a real file now: the sample is served read-only over HTTP by a
+ * fixture server and handed to the page as a `File` (see test/lib/local.mjs),
+ * which is the same path a dragged-in board takes.
+ *
+ *   node test/perf.mjs [--note <path>] [--index 264] [--dpr 1] [--json]
+ *                      [--headed] [--url http://127.0.0.1:8787/] [--chrome <path>]
  */
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startFixtureServer, openFixture } from './lib/local.mjs';
 
 const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const argv = process.argv.slice(2);
 const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const CHROME = arg('chrome', path.join(__dirname, '.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chrome'));
+const URL_BASE = arg('url', 'http://127.0.0.1:8787/');
 const JSON_OUT = argv.includes('--json');
 const PAGE_INDEX = Number(arg('index', 264));
 const DPR = Number(arg('dpr', 1));
+const HEADED = argv.includes('--headed');
+const SHOTS = path.join(__dirname, 'test', 'shots');
+fs.mkdirSync(SHOTS, { recursive: true });
+
+/** `--note` is a path on disk; a bare file name is looked up in the usual spots. */
+function resolveNote(given = 'Al-jabr-1.note') {
+  const name = path.basename(given);
+  const candidates = [
+    path.resolve(given),
+    path.join(__dirname, name),
+    path.join(__dirname, '.tmp-boards', name),
+    path.join(process.cwd(), name),
+    path.join('/home/cutx64/Workspace/Maths', name),
+  ];
+  for (const c of candidates) { try { if (fs.statSync(c).isFile()) return c; } catch { /* keep looking */ } }
+  console.error(`找不到样例白板：${given}\n请用 --note <path/to/board.note> 指定一个 .note 文件。`);
+  process.exit(1);
+}
+const NOTE = resolveNote(arg('note', 'Al-jabr-1.note'));
 
 const profileDir = path.join(__dirname, '.chrome-profile-perf');
 fs.rmSync(profileDir, { recursive: true, force: true });
@@ -27,8 +53,9 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
-  headless: 'new',
+  headless: HEADED ? false : 'new',
   userDataDir: profileDir,
+  protocolTimeout: 600000,
   env: {
     ...process.env, HOME: chromeHome,
     XDG_CONFIG_HOME: path.join(chromeHome, '.config'), XDG_CACHE_HOME: path.join(chromeHome, '.cache'),
@@ -44,9 +71,12 @@ if (DPR !== 1) {
     Object.defineProperty(window, 'devicePixelRatio', { get: () => d, configurable: true });
   }, DPR);
 }
-await page.goto('http://127.0.0.1:8787/', { waitUntil: 'domcontentloaded' });
+await page.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
 await sleep(1200);
-await page.evaluate(() => window.app.loadNote('Al-jabr-1.note', { confirm: false }));
+
+const fixtures = await startFixtureServer(path.dirname(NOTE));
+console.log(`→ opening ${NOTE} (served read-only)`);
+await openFixture(page, fixtures.url(path.basename(NOTE)), { writable: false });
 await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
 await sleep(1500);
 
@@ -174,5 +204,6 @@ if (JSON_OUT) {
     console.log(`${k}: 元素 ${v.elements} | 画笔 ${v.draw.fps.toFixed(1)} | 框选 ${v.marquee.fps.toFixed(1)} | 平移 ${v.pan.fps.toFixed(1)} | 缩放 ${v.zoom.fps.toFixed(1)}`);
   }
 }
-fs.writeFileSync(path.join(__dirname, 'test', 'shots', 'perf.json'), JSON.stringify(report, null, 2));
+fs.writeFileSync(path.join(SHOTS, 'perf.json'), JSON.stringify(report, null, 2));
+await fixtures.close();
 await browser.close();

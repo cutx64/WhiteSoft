@@ -68,36 +68,67 @@ export function setPref(key, value) {
 /** How many files the recent list keeps. */
 export const RECENT_LIMIT = 16;
 
-/** Files opened in this browser, most recent first. */
+/**
+ * Files opened in this browser, most recent first, one line per file.
+ *
+ * A browser never reveals a path, so the *name* identifies a file: the same
+ * board opened twice — even after an edit changed its size — must not fill the
+ * list with copies of itself.  Entries written before this rule existed (or by
+ * an older version) are merged here, newest first, borrowing a handle from the
+ * older entry when the newer one has none.
+ */
 export function recentFiles() {
   const list = getPref('recentFiles', []);
-  // Workspace files are remembered by path, local ones by name (+ a file
-  // handle when the browser supports it), so both kinds count as usable.
-  return Array.isArray(list) ? list.filter((r) => r && (r.path || r.name)) : [];
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  const byKey = new Map();
+  for (const raw of list) {
+    // Older versions also remembered boards living inside a server-side
+    // workspace; those entries carry a `path` and are of no use any more.
+    if (!raw || !raw.name || raw.path) continue;
+    const key = fileKey(raw);
+    const seen = byKey.get(key);
+    if (seen) {
+      if (!seen.handleId && raw.handleId) seen.handleId = raw.handleId;
+      continue;
+    }
+    const entry = { ...raw };
+    byKey.set(key, entry);
+    out.push(entry);
+  }
+  return out;
 }
 
 /**
- * Remember a file, newest first, without duplicates.
+ * Remember a file, newest first, replacing whatever was known about it.
  *
- * A remembered file is a *location*, never a copy: workspace files by their
- * relative path, local files by their browser file handle (or, when the
- * browser has no such API, just enough to recognise them again).
+ * A remembered file is a *location*, never a copy: the browser file handle is
+ * what makes it reachable again (or, when the browser has no such API, just
+ * enough to recognise it and ask for it another time).
  */
 export function rememberFile(entry) {
-  if (!entry || (!entry.path && !entry.name)) return recentFiles();
+  if (!entry || !entry.name) return recentFiles();
   const key = fileKey(entry);
+  const previous = recentFiles().find((r) => fileKey(r) === key);
   const list = recentFiles().filter((r) => fileKey(r) !== key);
-  list.unshift({ at: Date.now(), kind: 'note', source: 'workspace', ...entry });
+  list.unshift({
+    at: Date.now(),
+    kind: 'note',
+    source: 'local',
+    // Opening without a handle (drag & drop) must not forget where the file
+    // lives for the next time.
+    ...(previous?.handleId && !entry.handleId ? { handleId: previous.handleId } : {}),
+    ...entry,
+  });
   const trimmed = list.slice(0, RECENT_LIMIT);
   setPref('recentFiles', trimmed);
   return trimmed;
 }
 
-/** Identity of a remembered file (path when we have one, otherwise name+size). */
+/** Identity of a remembered file: its name (a browser never gives us a path). */
 export function fileKey(entry) {
-  if (!entry) return '';
-  if (entry.path) return 'path:' + entry.path;
-  return `local:${entry.name || ''}:${entry.size || 0}`;
+  if (!entry || !entry.name) return '';
+  return `name:${String(entry.name).normalize('NFC').toLowerCase()}`;
 }
 
 /** Forget every remembered file. */

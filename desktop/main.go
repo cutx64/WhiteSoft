@@ -2,13 +2,13 @@
 //
 // It does not reimplement the whiteboard: the browser UI and the `.note` API
 // stay in `public/` and `server.mjs`, and this binary starts that server,
-// points it at a workspace and opens a window on it.  A terminal manager
+// opens a window on it.  A terminal manager
 // (`whitesoft tui`) browses the same library from the command line.
 //
 // Usage:
 //
-//	whitesoft                     # 启动桌面端（默认工作区 = 仓库根目录）
-//	whitesoft --root ~/my-boards  # 指定存放 .note 的工作区
+//	whitesoft                     # 启动桌面端（文件都在浏览器里打开，不需要目录）
+//	whitesoft tui --root ~/boards # 终端管理器浏览哪个目录
 //	whitesoft --port 9000         # 指定端口（默认自动挑一个空闲端口）
 //	whitesoft --no-open           # 只启动服务，不打开浏览器
 //	whitesoft tui                 # 终端管理器（go-tui）
@@ -64,14 +64,18 @@ func run(args []string) error {
 		fmt.Printf("WhiteSoft 桌面端 %s\n", version)
 		return nil
 	}
-	if opts.root == "" {
-		opts.root, err = defaultRoot(opts.server)
-		if err != nil {
-			return err
+	// The desktop app needs no directory at all — boards are opened from the
+	// browser.  Only the terminal manager browses a folder of `.note` files.
+	if mode == "tui" {
+		if opts.root == "" {
+			opts.root, err = defaultRoot(opts.server)
+			if err != nil {
+				return err
+			}
 		}
-	}
-	if st, err := os.Stat(opts.root); err != nil || !st.IsDir() {
-		return fmt.Errorf("工作区目录不存在：%s", opts.root)
+		if st, err := os.Stat(opts.root); err != nil || !st.IsDir() {
+			return fmt.Errorf("目录不存在：%s", opts.root)
+		}
 	}
 
 	switch mode {
@@ -96,11 +100,15 @@ func parseFlags(mode string, args []string) (options, error) {
 	}
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "WhiteSoft %s — %s\n\n", version, usage)
-		fmt.Fprintf(os.Stderr, "用法：\n  whitesoft %s\n  whitesoft %s --root ~/my-boards\n\n", mode, mode)
+		if mode == "tui" {
+			fmt.Fprintf(os.Stderr, "用法：\n  whitesoft tui\n  whitesoft tui --root ~/my-boards\n\n")
+		} else {
+			fmt.Fprintf(os.Stderr, "用法：\n  whitesoft\n  whitesoft --port 8788\n\n")
+		}
 		fmt.Fprintln(os.Stderr, "选项：")
 		fs.PrintDefaults()
 	}
-	fs.StringVar(&opts.root, "root", "", "工作区目录（存放 .note / .pdf；默认取 server.mjs 所在仓库的上一级）")
+	fs.StringVar(&opts.root, "root", "", "终端管理器浏览的目录（仅 tui 子命令使用；桌面端不需要）")
 	fs.IntVar(&opts.port, "port", 0, "监听端口（默认 8787，被占用时自动顺延；指定后严格使用该端口）")
 	fs.StringVar(&opts.host, "host", "127.0.0.1", "监听地址")
 	fs.StringVar(&opts.server, "server", "", "server.mjs 的路径（默认自动查找）")
@@ -116,8 +124,8 @@ func parseFlags(mode string, args []string) (options, error) {
 	return opts, nil
 }
 
-// defaultRoot mirrors the server's own default: the directory holding the
-// boards is the parent of the repository.
+// defaultRoot is only used by the terminal manager: the folder it browses
+// defaults to the parent of the repository.
 func defaultRoot(serverJS string) (string, error) {
 	path, err := launcher.FindServerJS(serverJS)
 	if err != nil {
@@ -143,10 +151,8 @@ func runDesktop(opts options) error {
 	}
 	fmt.Printf("Node      : %s (%s)\n", nodeVersion, nodeBin)
 	fmt.Printf("服务端    : %s\n", serverJS)
-	fmt.Printf("工作区    : %s\n", opts.root)
 
 	srv, err := launcher.Start(ctx, launcher.Config{
-		Root:     opts.root,
 		ServerJS: serverJS,
 		NodeBin:  nodeBin,
 		Port:     opts.port,

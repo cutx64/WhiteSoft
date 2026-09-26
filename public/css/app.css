@@ -199,7 +199,7 @@ button { font-family: inherit; }
   transition: border-color .12s, background .12s;
 }
 .wb-thumbcanvas {
-  width: 46px; height: 60px; flex: none;
+  width: 56px; height: 74px; flex: none;
   border: 1px solid var(--line-2); border-radius: 4px;
   background: #fff; object-fit: contain;
 }
@@ -388,7 +388,7 @@ input[type="color"] {
 .wb-fileicon { font-size: 16px; }
 .wb-filename { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .wb-filesize { color: var(--ink-3); font-size: 12px; }
-/* small pill next to a file name: 本地导入 / 工作区 */
+/* small pill next to a file name: 本地文件 / PDF */
 .wb-filetag {
   display: inline-block; margin-left: 6px; padding: 0 6px; border-radius: 999px;
   font-size: 11px; font-weight: 600; vertical-align: 1px;

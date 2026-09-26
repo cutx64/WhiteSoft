@@ -12,6 +12,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
+const argv = process.argv.slice(2);
+const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
+const URL_BASE = arg('url', 'http://127.0.0.1:8787/');
 const profileDir = path.join(__dirname, '.chrome-profile-stroke');
 fs.rmSync(profileDir, { recursive: true, force: true });
 const chromeHome = path.join(__dirname, '.chrome-home');
@@ -27,7 +31,7 @@ const browser = await puppeteer.launch({
 const page = await browser.newPage();
 await page.setCacheEnabled(false);
 page.on('pageerror', (e) => console.log('[E]', e.message));
-await page.goto('http://127.0.0.1:8787/', { waitUntil: 'domcontentloaded' });
+await page.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
 await sleep(1500);
 
 const box = await page.$eval('#wb-canvas', (c) => {

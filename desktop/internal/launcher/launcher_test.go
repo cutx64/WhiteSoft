@@ -22,14 +22,13 @@ const argv = process.argv.slice(2);
 const arg = (name, dflt) => { const i = argv.indexOf('--' + name); return i >= 0 ? argv[i + 1] : dflt; };
 const port = Number(arg('port', 8787));
 const host = arg('host', '127.0.0.1');
-const root = arg('root', '.');
 http.createServer((req, res) => {
   if (req.url === '/api/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, workspace: root }));
+    return res.end(JSON.stringify({ ok: true }));
   }
   res.writeHead(404); res.end('nope');
-}).listen(port, host, () => console.log('fixture listening on ' + port + ' root=' + root));
+}).listen(port, host, () => console.log('fixture listening on ' + port + ' host=' + host));
 `
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
@@ -48,11 +47,10 @@ func TestStartStopFixtureServer(t *testing.T) {
 	requireNode(t)
 	dir := t.TempDir()
 	serverJS := writeFixtureServer(t, dir)
-	root := t.TempDir()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv, err := Start(ctx, Config{ServerJS: serverJS, Root: root, Log: os.Stderr, Ready: 15 * time.Second})
+	srv, err := Start(ctx, Config{ServerJS: serverJS, Log: os.Stderr, Ready: 15 * time.Second})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -91,10 +89,9 @@ func TestDefaultPortIsPreferred(t *testing.T) {
 	requireNode(t)
 	dir := t.TempDir()
 	serverJS := writeFixtureServer(t, dir)
-	root := t.TempDir()
 
 	free := portAvailable("127.0.0.1", DefaultPort)
-	srv, err := Start(context.Background(), Config{ServerJS: serverJS, Root: root, Ready: 15 * time.Second})
+	srv, err := Start(context.Background(), Config{ServerJS: serverJS, Ready: 15 * time.Second})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -126,7 +123,7 @@ func TestExplicitPortIsRespected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv, err := Start(context.Background(), Config{ServerJS: serverJS, Root: t.TempDir(), Port: want, Ready: 15 * time.Second})
+	srv, err := Start(context.Background(), Config{ServerJS: serverJS, Port: want, Ready: 15 * time.Second})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -156,7 +153,7 @@ func TestExplicitBusyPortFails(t *testing.T) {
 	busy := l.Addr().(*net.TCPAddr).Port
 
 	_, err = Start(context.Background(), Config{
-		ServerJS: serverJS, Root: t.TempDir(), Port: busy, Ready: 10 * time.Second,
+		ServerJS: serverJS, Port: busy, Ready: 10 * time.Second,
 	})
 	if err == nil {
 		t.Fatal("want an error when an explicit port is already in use")
@@ -181,17 +178,25 @@ func TestPortAvailable(t *testing.T) {
 	}
 }
 
-func TestStartFailsWithBadRoot(t *testing.T) {
+// The server hosts the UI and nothing else: there is no directory to serve and
+// no file API left to call.
+func TestNoServerSideFileAPI(t *testing.T) {
 	requireNode(t)
 	dir := t.TempDir()
 	serverJS := writeFixtureServer(t, dir)
-	_, err := Start(context.Background(), Config{
-		ServerJS: serverJS,
-		Root:     filepath.Join(dir, "does-not-exist"),
-		Ready:    5 * time.Second,
-	})
-	if err == nil {
-		t.Fatal("want an error for a missing workspace directory")
+	srv, err := Start(context.Background(), Config{ServerJS: serverJS, Ready: 15 * time.Second})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer srv.Stop()
+
+	res, err := http.Get(srv.URL() + "api/files")
+	if err != nil {
+		t.Fatalf("GET /api/files: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET /api/files = %d, want 404 (no workspace API)", res.StatusCode)
 	}
 }
 

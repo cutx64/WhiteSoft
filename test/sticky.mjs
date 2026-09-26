@@ -99,7 +99,6 @@ const scene = await page.evaluate(async (S) => {
   return { count: ed.page.elements.length };
 }, S);
 check('测试元素已建立', scene.count === 5, String(scene.count));
-await sleep(400);
 
 /** Canvas pixel at a canvas-local CSS position. */
 async function pixelAt(x, y) {
@@ -111,10 +110,26 @@ async function pixelAt(x, y) {
   }, { x, y });
 }
 
+/**
+ * Wait until the board has actually been painted.  The first frame rebuilds the
+ * world-space cache, which can take longer than a fixed sleep when the machine
+ * is busy — the pixel checks below then read a still-white canvas.
+ */
+async function waitPainted(timeout = 6000) {
+  const started = Date.now();
+  while (Date.now() - started < timeout) {
+    const p = await pixelAt(S.ax + S.w / 2, S.y + S.h - 40);
+    if (!p.every((v) => v > 245)) return true;
+    await sleep(120);
+  }
+  return false;
+}
+
 /* ---------------------------------------------------------------- *
  * 1. Rendering: rounding and transparency
  * ---------------------------------------------------------------- */
 console.log('\n[1] 便签外观');
+await waitPainted();
 const near = (a, b, tol = 4) => a.every((v, i) => Math.abs(v - b[i]) <= tol);
 const CORNER = 2;                                    // just inside the box corner
 const inner = (x) => [x + S.w - 40, S.y + S.h - 40]; // inside, clear of the label text

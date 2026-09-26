@@ -5,12 +5,19 @@
  * performance, every drawing tool, ruler, selection, undo/redo, page
  * navigation, PDF import, .note save round-trip and PNG/PDF/Zip export.
  *
- * Usage: node test/e2e.mjs [--chrome <path>]
+ * There is no server-side workspace any more: a board is a local file the user
+ * picked, so the sample `.note` files are served by the test process and turned
+ * into real `File`s (+ a genuine OPFS-backed `FileSystemFileHandle`) inside the
+ * page — see test/lib/local.mjs.  Ctrl+S then writes through that handle, and
+ * the written archive is read back with `readOpfs()` instead of an HTTP API.
+ *
+ * Usage: node test/e2e.mjs [--chrome <path>] [--url <base>] [--fixtures <dir>]
  */
 import puppeteer from 'puppeteer-core';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startFixtureServer, openFixture, chooseSaveTarget, readOpfs, resolveFixtureDir } from './lib/local.mjs';
 
 const __dirname = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SHOTS = path.join(__dirname, 'test', 'shots');
@@ -20,6 +27,16 @@ const argv = process.argv.slice(2);
 const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const CHROME = arg('chrome', path.join(__dirname, '.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chrome'));
 const URL_BASE = arg('url', 'http://127.0.0.1:8787/');
+// These suites assert on two private sample boards (446 / 655 pages), which the
+// repository does not ship; point them at whatever directory holds them.
+const FIXTURE_DIR = resolveFixtureDir(arg('fixtures', ''), ['Al-jabr-1.note', 'Al-jabr-2.note']);
+if (!FIXTURE_DIR) {
+  console.error('找不到样例白板 Al-jabr-1.note / Al-jabr-2.note。\n'
+    + '请把这两个文件放进仓库的 .tmp-boards/，或用 --fixtures <目录> 指定它们所在的目录。');
+  process.exit(2);
+}
+const NOTE1 = path.join(FIXTURE_DIR, 'Al-jabr-1.note');
+const NOTE2 = path.join(FIXTURE_DIR, 'Al-jabr-2.note');
 
 const profileDir = path.join(__dirname, '.chrome-profile-e2e');
 fs.rmSync(profileDir, { recursive: true, force: true });
@@ -33,6 +50,9 @@ function check(name, ok, detail = '') {
   results.push({ name, ok, detail });
   console.log(`${ok ? '  ✓' : '  ✗'} ${name}${detail ? ' — ' + detail : ''}`);
 }
+
+/** Serve the sample boards read-only over HTTP so the page can fetch them. */
+const fixtures = await startFixtureServer(FIXTURE_DIR);
 
 const browser = await puppeteer.launch({
   executablePath: CHROME,
@@ -60,12 +80,54 @@ const box = await page.$eval('#wb-canvas', (c) => {
 });
 const C = (dx, dy) => [box.x + dx, box.y + dy];
 
+/** Wait until the PDF background of the open board has been rasterised. */
+const waitPdfBitmap = (timeout = 60000) => page.waitForFunction(() => {
+  const ed = window.app.editor;
+  return !!(ed._pdfPages && ed._pdfPages[0] && ed._pdfPages[0].bitmap);
+}, { timeout });
+
+/**
+ * Open a board the browser itself wrote earlier, exactly like picking that file
+ * again: the archive is read from its file handle, so what is asserted is the
+ * bytes that really landed in the file.
+ */
+async function reopenOpfs(fileName, { wait = 1500 } = {}) {
+  const state = await page.evaluate(async ({ fileName, wait }) => {
+    const app = window.app;
+    const dir = await navigator.storage.getDirectory();
+    const handle = await dir.getFileHandle(fileName);
+    const file = await handle.getFile();
+    app.markSaved();
+    await app.openLocalFile(file, { handle });
+    await new Promise((r) => setTimeout(r, wait));
+    const ed = app.editor;
+    return {
+      name: ed.doc.name,
+      pages: ed.doc.pages.length,
+      pdfPages: ed.pdf.pageCount,
+      hasPdf: !!ed.doc.document,
+    };
+  }, { fileName, wait });
+  if (state.hasPdf) await waitPdfBitmap();
+  const pdf = await page.evaluate(() => {
+    const ed = window.app.editor;
+    return {
+      pdfOpen: ed.pdf.isOpen,
+      bg: !!(ed._pdfPages && ed._pdfPages[0] && ed._pdfPages[0].bitmap),
+    };
+  });
+  return { ...state, ...pdf };
+}
+
 /* ---------------------------------------------------------------- *
  * 1. Load Al-jabr-1.note
  * ---------------------------------------------------------------- */
 console.log('\n[1] 打开 Al-jabr-1.note');
-await page.evaluate(() => window.app.loadNote('Al-jabr-1.note', { confirm: false }));
+await page.evaluate(() => window.app.ui.closeDialog());
+// opens the sample board for real: a writable, OPFS-backed file handle
+await openFixture(page, fixtures.url('Al-jabr-1.note'));
 await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
+await waitPdfBitmap();
 await sleep(2500);
 const doc1 = await page.evaluate(() => {
   const ed = window.app.editor;
@@ -340,7 +402,8 @@ check('墨迹转形状（闭合矩形）', beautify2.n === 1 && beautify2.types.
  * 6. Page navigation
  * ---------------------------------------------------------------- */
 console.log('\n[6] 页面导航');
-await page.evaluate(() => window.app.loadNote('Al-jabr-1.note', { confirm: false }));
+// pick the very same board from disk again (a fresh copy, unsaved edits dropped)
+await openFixture(page, fixtures.url('Al-jabr-1.note'));
 await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
 await sleep(1500);
 const nav = await page.evaluate(() => {
@@ -368,31 +431,32 @@ const preSave = await page.evaluate(() => {
   ed.gotoPage(400);
   const marker = ed.page.elements[0];
   if (marker) marker._roundtrip = 'yes';
-  return { elements: ed.page.elements.length, types: [...new Set(ed.page.elements.map((e) => e.type))] };
+  return {
+    elements: ed.page.elements.length,
+    types: [...new Set(ed.page.elements.map((e) => e.type))],
+    // what the archive the board was opened from contains, for the "nothing is
+    // lost" comparison below
+    sourceEntries: ed.doc.localArchive ? ed.doc.localArchive.list().length : 0,
+  };
 });
+// Ctrl+S: the board has a handle, so it is written back into that very file
 const saved = await page.evaluate(async () => {
   const ed = window.app.editor;
-  const doc = ed.doc;
-  doc.path = '.cache/roundtrip.note';
-  await window.app.save();
+  const written = await window.app.save();
   await new Promise((r) => setTimeout(r, 1500));
-  return { ok: !window.app.modified, target: doc.path, name: doc.name };
+  return { ok: written, modified: window.app.modified, target: ed.doc.fileHandle?.name || null, name: ed.doc.name };
 });
-check('写入 .note 成功', saved.ok === true, JSON.stringify(saved).slice(0, 120));
+check('写入 .note 成功', saved.ok === true && saved.modified === false, JSON.stringify(saved).slice(0, 120));
 
 // a save must not drop any entry the source archive contained
-const entryCheck = await page.evaluate(async () => {
-  const a = await (await fetch('/api/note/meta?path=' + encodeURIComponent('Al-jabr-1.note'))).json();
-  const b = await (await fetch('/api/note/meta?path=' + encodeURIComponent('.cache/roundtrip.note'))).json();
-  return { source: a.entryCount, saved: b.entryCount };
-});
+const savedArchive = await readOpfs(page, 'Al-jabr-1.note');
 // keepAll copies every source entry, so saving can only ever add entries
-check('保存不丢条目（原样保留源归档 + 新增资源）', entryCheck.saved >= entryCheck.source,
-  `${entryCheck.source} → ${entryCheck.saved}`);
+check('保存不丢条目（原样保留源归档 + 新增资源）', savedArchive.entries.length >= preSave.sourceEntries,
+  `${preSave.sourceEntries} → ${savedArchive.entries.length}`);
 
-const reopened = await page.evaluate(async () => {
+await reopenOpfs('Al-jabr-1.note');
+const reopened = await page.evaluate(() => {
   const ed = window.app.editor;
-  await window.app.loadNote('.cache/roundtrip.note', { confirm: false });
   const p = ed.doc.pages[400];
   return {
     pages: ed.doc.pages.length,
@@ -413,20 +477,24 @@ await page.screenshot({ path: path.join(SHOTS, 'e2e-roundtrip.png') });
  * 8. PDF import
  * ---------------------------------------------------------------- */
 console.log('\n[8] 导入 PDF');
+// the PDF the board embeds (Resources/Document/…) — the same bytes the server
+// used to hand out, now read straight out of the local archive
 const pdfBytes = await page.evaluate(async () => {
-  const res = await fetch('/api/note/document?path=' + encodeURIComponent('Al-jabr-1.note'));
-  const buf = await res.arrayBuffer();
-  return buf.byteLength;
+  const doc = window.app.editor.doc;
+  const bytes = doc._pdfBytes || (doc.document
+    ? await doc.localArchive.read('Resources/Document/' + doc.document.fileName)
+    : null);
+  return bytes ? bytes.byteLength : 0;
 });
 check('可取到 PDF 字节', pdfBytes > 1000, pdfBytes + ' bytes');
 
 const imported = await page.evaluate(async () => {
-  const res = await fetch('/api/note/document?path=' + encodeURIComponent('Al-jabr-1.note'));
-  const blob = await res.blob();
-  const file = new File([blob], 'Al-jabr-1.pdf', { type: 'application/pdf' });
+  const ed = window.app.editor;
+  const doc = ed.doc;
+  const bytes = doc._pdfBytes || await doc.localArchive.read('Resources/Document/' + doc.document.fileName);
+  const file = new File([bytes], 'Al-jabr-1.pdf', { type: 'application/pdf' });
   await window.app.importPdfFile(file);
   await new Promise((r) => setTimeout(r, 2500));
-  const ed = window.app.editor;
   const p = ed.page;
   return {
     pages: ed.doc.pages.length,
@@ -449,28 +517,15 @@ await page.screenshot({ path: path.join(SHOTS, 'e2e-pdf-import.png') });
  * 8b. Import PDF -> draw -> save as .note -> reopen
  * ---------------------------------------------------------------- */
 console.log('\n[8b] 导入 PDF 后另存为 .note');
+await chooseSaveTarget(page, 'imported.note');
 const importSave = await page.evaluate(async () => {
   const ed = window.app.editor;
-  ed.doc.path = '.cache/imported.note';
-  const cv = document.createElement('canvas');
-  ed.setTool('pen');
-  await window.app.save();
+  const ok = await window.app.saveAs();
   await new Promise((r) => setTimeout(r, 1200));
-  void cv;
-  return { path: ed.doc.path, name: ed.doc.name, modified: window.app.modified };
+  return { ok, target: ed.doc.fileHandle?.name || null, name: ed.doc.name, modified: window.app.modified };
 });
-check('另存为 .note 成功', importSave.modified === false, JSON.stringify(importSave));
-const reImported = await page.evaluate(async () => {
-  await window.app.loadNote('.cache/imported.note', { confirm: false });
-  const ed = window.app.editor;
-  await new Promise((r) => setTimeout(r, 1200));
-  return {
-    pages: ed.doc.pages.length,
-    pdfPages: ed.pdf.pageCount,
-    pdfOpen: ed.pdf.isOpen,
-    bg: !!(ed._pdfPages && ed._pdfPages[0] && ed._pdfPages[0].bitmap),
-  };
-});
+check('另存为 .note 成功', importSave.ok === true && importSave.modified === false, JSON.stringify(importSave));
+const reImported = await reopenOpfs('imported.note');
 check('回读导入的 PDF 白板页数一致', reImported.pages === 445, String(reImported.pages));
 check('回读后 PDF 背景仍可渲染', reImported.pdfOpen && reImported.bg, JSON.stringify(reImported));
 
@@ -500,7 +555,7 @@ check('Zip 导出可用', zipOk > 0, zipOk + ' bytes');
  * 10. Al-jabr-2
  * ---------------------------------------------------------------- */
 console.log('\n[10] 打开 Al-jabr-2.note');
-await page.evaluate(() => window.app.loadNote('Al-jabr-2.note', { confirm: false }));
+await openFixture(page, fixtures.url('Al-jabr-2.note'));
 await page.waitForFunction(() => window.app.editor.doc.pages.length > 100, { timeout: 120000 });
 await sleep(2500);
 const doc2 = await page.evaluate(() => {
@@ -511,15 +566,13 @@ const doc2 = await page.evaluate(() => {
 });
 check('Al-jabr-2 画纸数 = 655', doc2.pages === 655, String(doc2.pages));
 check('Al-jabr-2 PDF 页数 = 652', doc2.pdf === 652, String(doc2.pdf));
-await page.waitForFunction(() => {
-  const ed = window.app.editor;
-  return ed._pdfPages && ed._pdfPages[0] && ed._pdfPages[0].bitmap;
-}, { timeout: 60000 });
+await waitPdfBitmap();
 await sleep(1500);
 await page.screenshot({ path: path.join(SHOTS, 'e2e-aljabr2.png') });
 
 /* ---------------------------------------------------------------- */
 await browser.close();
+await fixtures.close();
 
 const failed = results.filter((r) => !r.ok);
 console.log(`\n===== ${results.length - failed.length}/${results.length} 通过 =====`);

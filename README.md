@@ -3,8 +3,9 @@
 **在浏览器里运行的本地白板 —— 导入 PDF，读写 Microsoft Whiteboard 的 `.note` 文件。**
 
 WhiteSoft 是一个复刻 **Microsoft Whiteboard（Windows 本地版）** 的本地应用：界面是纯前端
-Canvas 应用，由本机一个**零运行时依赖**的 Node 进程提供服务（静态资源 + `.note` 读写 API）。
-所有数据都在你自己的磁盘上，全程离线。
+Canvas 应用，由本机一个**零运行时依赖**的 Node 进程把页面发出来（它只做静态托管）。
+**白板文件从头到尾由浏览器直接读写**——没有工作区、没有副本、没有上传：文件从磁盘打开，
+就在原文件上保存。所有数据都在你自己的磁盘上，全程离线。
 
 ![WhiteSoft 界面](docs/screenshot.png)
 
@@ -16,18 +17,29 @@ Canvas 应用，由本机一个**零运行时依赖**的 Node 进程提供服务
 - **文本与便签支持 LaTeX** —— 在文本框或便签里写 `$x^2$` / `$$\int_0^1 x\,dx$$`，
   由内置的 **MathJax** 渲染成真正的数学排版（离线，无需联网）。
 - **桌面端（Go）** —— `desktop/` 里是一个轻量 Go 程序：自动拉起同一个网页端并打开窗口，
-  还带一个 **go-tui 终端管理器**，可以在终端里浏览、检索、统计 `.note` 库（只读）。
+  还带一个 **go-tui 终端管理器**，可以在终端里浏览、检索、统计某个目录下的 `.note`（只读）。
+- **文件就是文件** —— 打开用系统文件对话框，`Ctrl+S` 原地写回；最近列表记的是**位置**
+  （File System Access 的文件句柄），不是副本。服务端不接触任何白板。
 - **保存是非破坏性的** —— `.note` → `.note` 只重写 `manifest.json` 与 `Pages/*.json`，
   源归档里的每一个条目都原样搬运（连当前没有任何画纸引用的图片也保留），
   350 MB 的白板存回也只要一两秒；先写临时文件再原子重命名，中途失败不会破坏原文件。
+- **一键压缩** —— 保存从不丢东西的反面，是文件会慢慢囤积没人引用的图片。菜单里的
+  「一键压缩」先列出要删的条目和能省的空间，再就地重写归档：删掉没有任何对象引用的资源、
+  把未压缩存放的条目重新压缩，其余条目（包括它不认识的目录）逐字节原样保留。
 
 > **English** — WhiteSoft is an offline, browser-based clone of the Microsoft Whiteboard
-> Windows app, served by a zero-dependency Node process on `127.0.0.1`. It imports PDFs
+> Windows app, served by a zero-dependency Node process on `127.0.0.1` that does nothing
+> but host the UI: every board is opened and saved by the browser against the user's own
+> files (File System Access handles; a download where the API is missing) — no workspace,
+> no copies, no uploads. It imports PDFs
 > (one whiteboard page per PDF page) and reads/writes the local `.note` format with full
 > fidelity: ink, highlighters, shapes, images, text, tables, sticky notes and the PDF
 > backdrop, all in their original world coordinates. Text boxes and sticky notes render
 > **LaTeX** (`$…$` / `$$…$$`) with a bundled MathJax. Saving is non-destructive — every
-> entry of the source archive is carried over verbatim. A small Go program in `desktop/`
+> entry of the source archive is carried over verbatim — and a one-click **compact**
+> command shows what it would drop, then rewrites the archive without the resources no
+> page references (re-deflating entries that were stored uncompressed) while copying
+> everything else byte for byte. A small Go program in `desktop/`
 > launches the same UI as a desktop app, and adds a go-tui terminal manager for browsing
 > a `.note` library.
 > Jump to [Quick start](#快速开始) · [`.note` format](#note-格式反向工程) · [Tests](#测试).
@@ -68,27 +80,22 @@ cd WhiteSoft
 ./whitesoft.sh
 ```
 
-脚本会检查 Node 版本、确认端口可用、列出工作区里的白板，然后启动服务：
+脚本会检查 Node 版本、确认端口可用，然后启动服务：
 
 ```
 WhiteSoft — 本地白板
 ──────────────────────────────────────────────
 界面地址 : http://127.0.0.1:8787/
-工作区   : /path/to/workspace
-发现白板 : lecture-01.note, lecture-02.note
+打开白板 : 界面里用「打开」选择本机的 .note / .pdf（文件不会被复制或上传）
 停止服务 : Ctrl+C
 ──────────────────────────────────────────────
 ```
 
 浏览器打开 **http://127.0.0.1:8787/** 即可（加 `--open` 会自动打开）。
 
-**工作区**是存放 `.note` / `.pdf` 的目录：标题栏的「打开」对话框会列出其中的文件，
-保存 `.note` 也以它为根。默认取**本仓库的上一级目录**，通常应该用 `--root` 指定到你自己
-的白板目录：
-
-```bash
-./whitesoft.sh --root ~/my-boards
-```
+**没有「工作区」，也不需要指定目录**：服务端只负责把界面发给浏览器，**白板的读写全部由浏览器
+对着你自己的文件完成**（打开用系统文件对话框，保存原地写回原文件）。所以脚本、桌面端、
+`server.mjs` 都不再需要 `--root`。
 
 常用参数：
 
@@ -96,7 +103,6 @@ WhiteSoft — 本地白板
 |---|---|
 | `-p, --port <n>` | 监听端口，默认 `8787`（也可用环境变量 `PORT`）|
 | `-H, --host <addr>` | 监听地址，默认 `127.0.0.1`（仅本机；改成 `0.0.0.0` 会暴露到局域网）|
-| `-r, --root <dir>` | 工作区目录，默认本仓库的上一级目录 |
 | `--open` | 启动后自动打开默认浏览器 |
 | `--auto-port` | 端口被占用时自动顺延（最多试 50 个）|
 | `-h, --help` | 显示帮助 |
@@ -104,7 +110,7 @@ WhiteSoft — 本地白板
 也可以绕过脚本直接启动服务端：
 
 ```bash
-node server.mjs --port 8787 --host 127.0.0.1 --root ~/my-boards
+node server.mjs --port 8787 --host 127.0.0.1
 ```
 
 > 服务端零运行时依赖；PDF 渲染（pdf.js）与 ZIP 打包（fflate）都已放在 `public/vendor/`，
@@ -114,7 +120,10 @@ node server.mjs --port 8787 --host 127.0.0.1 --root ~/my-boards
 
 1. 点标题栏的 **导入 PDF**（或把 PDF 拖进窗口）→ 生成 n 张画纸，每页以 PDF 页为背景。
 2. 用工具栏在画纸上批注；右下角 `‹ [页码] / n ›` 可以跳到任意画纸。
-3. `Ctrl+S` 保存为 `.note`，得到的文件可以直接用 Microsoft Whiteboard 打开。
+3. `Ctrl+S`：第一次会让你选一个位置（系统「保存到」对话框）写出 `.note`，
+   之后 `Ctrl+S` 就原地覆盖这个文件。得到的 `.note` 可以直接用 Microsoft Whiteboard 打开。
+4. 想接着改本机已有的 `.note`：点 **打开 → 从本地文件选择**；
+   下次可以从 **最近使用的文件** 里直接再打开（记得的是文件位置，不是副本）。
 
 > 仓库里**不包含** `.note` 样例文件（它们是个人笔记）。想立刻看效果，导入一份自己的 PDF 即可。
 
@@ -129,16 +138,15 @@ node server.mjs --port 8787 --host 127.0.0.1 --root ~/my-boards
 ```bash
 cd desktop
 go build -o whitesoft .          # 需要 Go 1.24+（运行时需要 Node.js 18+）
-./whitesoft                      # 桌面端：启动服务 + 打开浏览器
-./whitesoft --root ~/my-boards   # 指定工作区
+./whitesoft                      # 桌面端：启动服务 + 打开浏览器（不需要目录）
 ./whitesoft --port 9000          # 指定端口（默认自动挑一个空闲端口）
 ./whitesoft --no-open            # 只启动服务，不打开浏览器
-./whitesoft tui                  # 终端管理器
+./whitesoft tui --root ~/boards  # 终端管理器：浏览哪个目录
 ```
 
 | 选项 | 说明 |
 |---|---|
-| `--root <dir>` | 工作区目录（默认 = `server.mjs` 所在仓库的上一级）|
+| `--root <dir>` | 仅 `tui` 使用：终端管理器浏览哪个目录（默认 = `server.mjs` 所在仓库的上一级）；桌面端不需要 |
 | `--port <n>` | 端口（默认 **8787**，与 `whitesoft.sh` 一致；被占用时自动顺延并提示。指定后严格使用该端口）|
 | `--host <addr>` | 监听地址，默认 `127.0.0.1` |
 | `--server <path>` | 手动指定 `server.mjs`（默认从可执行文件所在目录向上查找）|
@@ -159,7 +167,7 @@ go build -o whitesoft .          # 需要 Go 1.24+（运行时需要 Node.js 18+
 
 用 [go-tui](https://go-tui.dev/) 写的终端界面，**只读**地查看白板库：
 
-- 左栏列出工作区里的 `.note`：页数、图片数、是否内嵌 PDF、文件大小；
+- 左栏列出目录里的 `.note`：页数、图片数、是否内嵌 PDF、文件大小；
 - 选中后按 `enter` 在后台解析页面（带进度），右栏列出每页的元素 / 墨迹点 / 图片统计；
 - 选中画纸会显示它的文字与 LaTeX 源码预览（`a` 展开全部文字）；
 - `/` 既过滤白板名，也按**内容**过滤画纸；`s` 启停 `server.mjs`，`o` 切到网页端编辑。
@@ -168,7 +176,7 @@ go build -o whitesoft .          # 需要 Go 1.24+（运行时需要 Node.js 18+
 `s` 启停服务 · `/` 搜索 · `a` 展开文字 · `r` 重新扫描 · `q` 退出。
 
 > 终端里无法绘图（TUI 没有画布），所以管理器负责浏览、检索与统计，编辑仍在网页端完成。
-> Go 侧对 `.note` **永远只读**；写入依旧只经过 `server.mjs`，非破坏性保存逻辑只有一份实现。
+> Go 侧对 `.note` **永远只读**；写入只有一份实现 —— 浏览器里的 `zipwrite.js`。
 
 `internal/tui/manager.gsx` 是 go-tui 的模板，`manager_gsx.go` 是它生成的代码（已提交，
 普通 `go build` 不需要 `tui` CLI）。改过 `.gsx` 后重新生成：
@@ -297,15 +305,31 @@ go run github.com/grindlemire/go-tui/cmd/tui@v0.22.1 generate ./...
 
 ### 页面与文件
 
-- **页面**：页面面板（实时缩略图、拖拽排序、复制、删除）、新建画纸、
+- **页面**：页面面板（**每页一张预览图**、拖拽排序、复制、删除）、新建画纸、
   **右下角页码输入框跳转**、`PageUp/PageDown` 翻页。
 - **打开文件分两条路**：点「打开」（或 `Ctrl+O`）先选来源 —— **从本地文件选择**
   （系统文件对话框，直接打开本机的 `.note` 或导入 `.pdf`）或 **最近使用的文件**
-  （这个浏览器打开过的文件 + 工作区里的白板，都按时间倒序，本地导入的带来源标记）。
-  从本地导入的文件会复制一份到工作区的 `.cache/`，所以也能在最近列表里再次打开。
+  （这个浏览器打开过的文件，按时间倒序）。
+- **文件就是你自己的文件，没有副本也没有上传**：`.note` 由浏览器**直接读取**
+  （`zipread.js` 随机访问 ZIP、按需解压，不整包读入内存），图片也从原文件现取现画；
+  最近列表记的是文件的**位置**而不是副本 —— Chrome / Edge 下用 File System Access 的文件
+  句柄记住（再次打开就地读取原文件，只多一次授权），其他浏览器则请你重新选择一次。
+  列表里**一个文件只占一条**：浏览器不会把路径交给网页，所以按文件名识别，
+  同一个文件改过、保存过、体积变了也仍然只有一条（显示的是最新的信息）。
+- **`Ctrl+S` 永远写回你打开的那个文件**：流式重写，页面与清单重新压缩，**其余条目
+  （图片、内嵌 PDF）连同压缩方式与字节原样搬运** —— 所以就地保存不会让文件变大；写完会刷新
+  归档快照，因此**可以反复保存**。只有浏览器不给可写句柄时（Firefox / Safari、拖进来的
+  文件）才会说明原因并转为另存为。**`Ctrl+Shift+S` 才是「另存为」**：Chrome / Edge 下弹
+  系统「保存到」对话框（此后 `Ctrl+S` 写这份新副本），没有该 API 时下载一份副本。
 - **文件**：导入 PDF（n 页 → n 张画纸，版式为一屏宽，即在 100% 时正好铺满窗口宽度）、
   打开 `.note`、保存 / 另存为 `.note`、导出 PNG / PDF / Zip(HTML+JSON)、
   拖放 `.note` 或 `.pdf` 到窗口打开。
+- **一键压缩 `.note`**（「更多」菜单或「导出」对话框）：删掉文件里**没有任何对象引用**的
+  图片与 PDF，并把**未压缩存放**的条目重新压缩。点之前先给预览：要删几个、省多少、
+  体积大约变成多少；确认后**在页面里流式重写这个文件**（先写临时文件再原子替换，中途失败
+  不会留下半个文件）。**只动 `Resources/Images/` 与 `Resources/Document/` 里没人用到的
+  条目**，画纸、清单与其它目录的内容原样搬运，内容本身不做任何修改；压缩完可以继续正常打开、
+  编辑、保存（默认保存策略仍然是非破坏性的，压缩是你显式要求的动作）。
 - **未保存更改有确认框**：打开其他 `.note`、导入 PDF 或新建白板前会先弹出
   （取消 / 放弃更改 / 保存并继续）。
 - **自动保存**：设置里可选 关闭 / 1 / 2 / 5 / 10 / 30 分钟 / 1 小时，到点自动把当前打开的
@@ -441,8 +465,8 @@ alpha 通道里，不额外占字段。
 ## 项目结构
 
 ```
-whitesoft.sh                启动脚本（检查 Node 版本 / 端口 / 工作区，打印地址后 exec 服务端）
-server.mjs                  零依赖 HTTP 服务：静态资源 + ZIP 随机读 + .note 保存 + PDF 上传
+whitesoft.sh                启动脚本（检查 Node 版本 / 端口，打印地址后 exec 服务端）
+server.mjs                  零依赖 HTTP 服务：托管 public/ 与 /api/health，不碰任何白板文件
 package.json                运行时无依赖，只有测试用的 puppeteer-core
 desktop/                    Go 桌面端 + go-tui 终端管理器（见「桌面端（Go）」一节）
 ├── main.go                 命令行入口：默认桌面模式，tui 子命令进终端管理器
@@ -461,9 +485,12 @@ public/
 │   ├── render.js           Canvas 渲染器（世界坐标缓存 + 路径缓存）
 │   ├── elements.js         元素模型 + 调色板 + 命中测试 + 几何变换
 │   ├── mathtext.js         LaTeX：分隔符解析、MathJax 排版、位图缓存、富文本排版
-│   ├── prefs.js            机器级偏好（自动保存间隔、最近使用的文件）
+│   ├── zipread.js          浏览器端随机访问 ZIP（直接读本机文件）
+│   ├── zipwrite.js         流式 ZIP 写入：未改动的条目按原样搬运（就地保存用）
+│   ├── filehandles.js      本地文件句柄（最近列表与就地保存的「位置链接」）
+│   ├── prefs.js            机器级偏好（自动保存间隔、最近使用的文件位置）
 │   ├── selectionbar.js     所选操作栏
-│   ├── document.js         文档模型 + .note 读写 + PDF 导入排版
+│   ├── document.js         文档模型 + .note 读写（本地文件句柄）+ 资源引用分析 / 压缩 + PDF 导入排版
 │   ├── pdfmanager.js       pdf.js 封装（分页位图缓存、CJK CMap）
 │   ├── resources.js        图片资源缓存
 │   ├── inlineeditor.js     文本 / 便签 / 表格的 DOM 内联编辑器（中文输入法友好）
@@ -475,6 +502,8 @@ public/
     ├── mathjax/            MathJax 3.2.2（TeX → SVG），文本框 / 便签的公式渲染
     └── fflate/             Zip 导出用的压缩库
 test/                       端到端测试（Puppeteer 驱动真实 Chromium），见下一节
+├── lib/local.mjs           测试夹具：把真实文件交给页面（只读静态服务 + OPFS 句柄）
+└── …                       各套件
 ```
 
 ---
@@ -489,7 +518,7 @@ test/                       端到端测试（Puppeteer 驱动真实 Chromium）
 ```bash
 npm install                                   # 只为测试安装 puppeteer-core
 npx @puppeteer/browsers install chrome@stable # 下载 Chrome for Testing 到 .browsers/
-node server.mjs --port 8787 --root <白板目录>  # 测试默认连 http://127.0.0.1:8787/
+node server.mjs --port 8787                   # 测试默认连 http://127.0.0.1:8787/
 ```
 
 Chrome 路径默认取 `.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chrome`，
@@ -500,34 +529,48 @@ Chrome 路径默认取 `.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chro
 ```bash
 node test/e2e.mjs                 # 53 项：两个样例白板的加载与还原、重页面渲染、全部绘图工具、直尺约束、
                                   #        选择变换与撤销、墨迹转形状、页面导航、.note 保存回读、PDF 导入与另存、PNG/Zip 导出
-node test/round2.mjs              # 33 项：打开对话框（本地文件 / 最近使用两个分支）、表格单元格编辑、
+node test/round2.mjs              # 32 项：打开对话框（本地文件 / 最近使用两个分支）、表格单元格编辑、
                                   #        便签缩放手柄、复制粘贴与跨页粘贴、
                                   #        滚轮/空格/中键平移、直尺移动旋转微调、四种背景、Alt+… 快捷键、三支笔槽、替代文本
 node test/round3.mjs              # 46 项：撤销/删除后立即重绘（画布指纹验证）、手形工具、荧光笔直线开关、
                                   #        半圆端点逐像素验证、批量删除、右键菜单、任意比例输入、未保存更改确认框
-node test/round4.mjs              # 28 项：第一次框选只选择不移动、数字键 1–0、Shift+N 新建白板、
+node test/round4.mjs              # 30 项：第一次框选只选择不移动、数字键 1–0、Shift+N 新建白板
+                                  #        （并且立刻重画成空白页，不会留着上一张板的渲染）、
                                   #        Ctrl+Alt+N/P 前后插入画纸、所选操作栏、图片等比缩放、移到图层最底层
 node test/strokes.mjs             # 9 项：笔迹连续性 —— 沿每条墨迹中线逐像素采样，要求 100% 命中
 node test/sticky.mjs              # 22 项：便签圆角 / 颜色 / 透明度、操作栏按所选内容增减按钮、
                                   #        「编辑」按钮直接进入编辑、一步撤销、像素级外观验证
 node test/autosave.mjs            # 18 项：自动保存 —— 设置项与持久化、定时真的写盘、
                                   #        无改动 / 无文件 / 正在输入时的行为
-node test/resources.mjs           # 18 项：图片资源生命周期 —— 粘贴→保存→切到别的白板→切回来仍能渲染、
-                                  #        不串档、与刷新整页结果一致；本地打开另存后图片仍在
-node test/openflow.mjs            # 20 项：打开流程 —— 本地文件 / 最近使用两个分支、本地打开不上传不留副本、
-                                  #        记录的是位置（句柄）而非副本、工作区倒序、去重、清空、重新选择
+node test/resources.mjs           # 22 项：图片资源生命周期 —— 粘贴→保存→切到别的白板→切回来仍能渲染、
+                                  #        不串档、与刷新整页一致、本地打开另存后图片仍在、粘贴比例正确
+node test/openflow.mjs            # 21 项：打开流程 —— 本地文件 / 最近使用两个分支、全程零 /api/ 请求、
+                                  #        记录的是位置（句柄）而非副本、同名文件只占一条（改动过也一样）、
+                                  #        历史重复记录自动合并、清空、句柄丢失时重新选择、拖放、
+                                  #        服务端不再有文件列表接口
+node test/savekeys.mjs            # 17 项：Ctrl+S / Ctrl+Shift+S —— 有句柄就地覆盖、只读文件转另存为、
+                                  #        系统对话框取消时什么都不写、完全没有文件系统访问时下载副本、
+                                  #        连续三次写回（写出的 .note 会被重新解析校验）、新白板首次保存
+node test/compact.mjs             # 20 项：一键压缩 —— 预览只报未引用的条目且不动文件、压缩后画纸未变、
+                                  #        未改动的图片按原样搬运、未知目录条目保留、幂等、压缩后再保存不会
+                                  #        把删掉的资源带回来、未压缩存放的条目被重新压缩、
+                                  #        没有可写句柄 / 不是白板时明确拒绝
 node test/math.mjs                # 34 项：LaTeX —— 分隔符解析、MathJax 排版与栅格化、公式驱动排版、
                                   #        独立公式独占行、坏公式、缓存与重绘、导出含公式、
                                   #        编辑态不重影（文本框 / 便签 / 表格）、以及"选工具→点击→打字→提交"的真实交互
 node test/perf.mjs                # 帧率基准（可加 --dpr 2 / --index <页码>）
 node test/smoke.mjs               # 冒烟测试 + 截图（--note <文件> --page <n> --headed）
 node test/visual.mjs              # 单页视觉比对（同时用 pdftoppm 输出参考图）：--note --index --zoom
-node test/thumbs.mjs              # 页面缩略图（懒加载）
+node test/thumbs.mjs              # 19 项：页面面板的预览图 —— 每页一张、可见页真的画上内容、
+                                  #        颜色属于自己那一页（不是别页的）、空白页保持空白、懒加载、
+                                  #        点击跳页、编辑后刷新、撤销后刷新、新建白板后立刻清空、
+                                  #        拖动排序后列表与预览一起跟着走
 node test/inline.mjs              # 内联编辑器（文本 / 便签 / 表格）
 node test/final.mjs               # 脏标记：干净加载不显示、编辑后显示
 ```
 
-`e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` / `autosave` / `resources` / `openflow` 结束时打印
+`e2e` / `round2` / `round3` / `round4` / `strokes` / `math` / `sticky` / `autosave` / `resources` / `openflow` /
+`savekeys` / `compact` / `thumbs` 结束时打印
 `===== N/N 通过 =====`，有失败项时以非零码退出。
 
 Go 侧（桌面端）自带单元测试，`launcher` 那组会真的启一个 node 子进程并等它的健康检查：
@@ -536,29 +579,34 @@ Go 侧（桌面端）自带单元测试，`launcher` 那组会真的启一个 no
 cd desktop && go test ./...       # notes / launcher / tui 三个包
 ```
 
-> 上面 7 个网页套件也整体跑在**由 Go 桌面端拉起的服务**上验证过一遍（`./whitesoft --root <白板目录> --port 8792`），
-> 也就是说 `desktop/` 只是换了启动方式，API 与前端行为完全一致。
+> 上面这些网页套件也整体跑在**由 Go 桌面端拉起的服务**上验证过一遍
+> （`./whitesoft --port 8792`），也就是说 `desktop/` 只是换了启动方式，前端行为完全一致。
 
-> **注意**：`e2e.mjs`、`round2.mjs`、`round3.mjs` 里有针对两个私有样例白板的硬编码断言
-> （446 页 / 655 页、第 265 页 1751 个元素、第 168 页的 14 条直尺高亮等），
-> 仓库里**不含**这两个文件。要复现请把它们放到工作区根目录（或按自己的白板改断言）；
-> `math.mjs` / `sticky.mjs` / `autosave.mjs` / `resources.mjs` / `openflow.mjs` / `strokes.mjs` / `smoke.mjs` / `visual.mjs` 自带内容或支持
-> `--note <你的文件>`，不需要样例白板。
+> **注意**：`e2e.mjs`、`round3.mjs`（以及 `perf.mjs` / `smoke.mjs` / `visual.mjs` 的默认样例）里
+> 有针对两个私有样例白板的硬编码断言（446 页 / 655 页、第 265 页 1751 个元素、
+> 第 168 页的 14 条直尺高亮等），仓库里**不含**这两个文件。测试现在通过
+> `--fixtures <目录>`（默认 `~/Workspace/Maths`，也就是样例所在目录）把它们**只读**地交给页面；
+> `perf` / `smoke` / `visual` 还支持 `--note <你的文件>`。
+> `math.mjs` / `sticky.mjs` / `autosave.mjs` / `resources.mjs` / `openflow.mjs` / `savekeys.mjs` /
+> `compact.mjs` / `thumbs.mjs` / `strokes.mjs` 自带内容，不需要样例白板。
 
 本仓库最近一次全量运行（Linux、无头 Chromium 153、软件渲染）：
 
 | 套件 | 结果 |
 |---|---|
 | `test/e2e.mjs` | **53 / 53 通过** |
-| `test/round2.mjs` | **33 / 33 通过** |
+| `test/round2.mjs` | **32 / 32 通过** |
 | `test/round3.mjs` | **46 / 46 通过** |
-| `test/round4.mjs` | **28 / 28 通过** |
+| `test/round4.mjs` | **30 / 30 通过** |
 | `test/strokes.mjs` | **9 / 9 通过** |
 | `test/math.mjs` | **34 / 34 通过** |
 | `test/sticky.mjs` | **22 / 22 通过** |
 | `test/autosave.mjs` | **18 / 18 通过** |
-| `test/resources.mjs` | **18 / 18 通过** |
-| `test/openflow.mjs` | **20 / 20 通过** |
+| `test/resources.mjs` | **22 / 22 通过** |
+| `test/openflow.mjs` | **21 / 21 通过** |
+| `test/savekeys.mjs` | **17 / 17 通过** |
+| `test/compact.mjs` | **20 / 20 通过** |
+| `test/thumbs.mjs` | **19 / 19 通过** |
 | `desktop` `go test ./...` | **全部通过**（notes / launcher / tui）|
 
 ---
@@ -598,14 +646,25 @@ cd desktop && go test ./...       # notes / launcher / tui 三个包
 
 ## 实现要点
 
-- **零运行时依赖**：服务端只用 `node:http` / `node:fs` / `node:zlib`。
-  ZIP 的读与写都是自己实现的（`server.mjs`）：读用中央目录 + 随机访问，
-  写用**流式**写入并支持 `copyFrom` —— 直接把源归档里已压缩的条目原样搬运，
-  所以保存 350 MB 的白板不需要解压再压缩任何一张图片。
-- **保存是保真的**：`keepAll` 会保留源归档的每一个条目；新保存的文件先写成
-  `*.tmp-<pid>` 再 `rename` 覆盖，中途失败不会破坏原文件。
-- **归档句柄有缓存**：同一路径的 `.note` 只解析一次中央目录，并用 `size + mtime` 校验，
-  覆盖保存后不会读到旧内容。
+- **零运行时依赖**：服务端只用 `node:http` / `node:fs`，而且只做静态托管 ——
+  450 行的 `server.mjs` 里没有一行碰过白板文件。
+- **ZIP 的读与写都在浏览器里自己实现**：`zipread.js` 走中央目录 + 随机访问，
+  只解压当前要画的那张图；`zipwrite.js` 是**流式**写入，能直接把归档里已压缩的条目
+  原样搬运（`addRaw`：压缩方式、CRC、字节都不变），所以保存 300 MB 的白板
+  不需要解压再压缩任何一张图片，也不需要整包进内存。
+- **保存是保真的，而且写回原文件**：只有 `manifest.json` 与 `Pages/*.json` 重新生成，
+  其余条目逐字节搬运；写入通过 `FileSystemWritableFileStream` 完成 ——
+  浏览器自己先写临时文件、成功后才替换，中途失败不会破坏原文件。
+- **压缩只信"引用"，而且宁多留不误删**：引用不靠字段名硬编码去找 —— 白板里引用资源用的是
+  **裸文件名**（`element.fileName`、`manifest.document.fileName`），只有归档知道它在哪个目录，
+  所以压缩时把清单与每张画纸里出现的**所有字符串**收集起来，再按「完整条目名」或「文件名」
+  去归档条目里对号入座（`Resources/…` 形式的完整路径也照收）。未知字段、未来新增的字段因此
+  只会让压缩**少删**，不会多删。候选目录只有 `Resources/Images/` 与 `Resources/Document/`，
+  其它目录（含不认识的目录）一律原样搬运。压缩没有额外备份（对话框里会写明），但写入同样走
+  浏览器的「先写临时文件、成功再替换」路径，中途失败不会损坏原文件。
+- **写完之后换一份读取快照**：就地保存改变了文件内容，旧的 `ZipReader` 立刻作废
+  （否则下一次保存会把已删掉的条目又搬回来，或读到错位的字节）；
+  保存与压缩结束后都重新打开文件，并保留已解码的位图，画布不会闪。
 - **渲染与模型分离**：`elements.js` 只描述数据与几何，`render.js` 负责把世界坐标画出来，
   `editor.js` 管状态与指针事件，`ui.js` 管 DOM —— 所以测试可以既走真实指针事件，
   也可以直接操作模型来构造极端场景。
@@ -621,11 +680,14 @@ cd desktop && go test ./...       # notes / launcher / tui 三个包
 
 - **只支持 `.note` 这种本地格式**。云端 `.whiteboard` 是 OneDrive 的存储形式，不是同一种
   文件；本应用只是把它当普通 ZIP 尝试打开，未做验证。
-- **保存会覆盖当前打开的 `.note`**（也就是 `doc.path` 指向的文件）。想保留原件请用
-  「另存为」（`Ctrl+Shift+S`），或先把文件复制一份。
+- **保存会覆盖你打开的那个 `.note`**。想保留原件请用「另存为」（`Ctrl+Shift+S`）。
+- **浏览器不给可写句柄时保存会退化为下载**：Firefox / Safari 没有 File System Access，
+  拖进来的文件也只有只读快照 —— 这时 `Ctrl+S` 会下载一份副本（并说明原因），
+  想原地保存请用 Chrome / Edge 打开本机文件。
 - 从零新建（导入 PDF 后另存）的白板会把 PDF 内嵌进 `.note`，文件大小 ≈ PDF 大小。
 - 撤销历史按操作增量记录，上限 **300 步**。
-- 页面缩略图是按需渲染的；快速滚动 400+ 页时缩略图会逐个补齐。
+- 页面预览是按需渲染的（只画看得见的那几页）；快速滚动 400+ 页时预览会逐个补齐，
+  当前页在编辑停下约 0.3 秒后自动重画。
 - 这是单人本地应用：**没有协作、评论、模板、Bing 图片搜索**等联网功能
   （原版这些能力依赖 Microsoft 账号与云服务）。
 - 荧光笔的半圆端点来自本克隆的渲染规则（直线高亮一律圆头），新画的高亮会写一个

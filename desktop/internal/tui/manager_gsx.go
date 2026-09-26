@@ -16,7 +16,7 @@ import (
 )
 
 type Options struct {
-	Root   string // workspace directory holding the .note files
+	Root   string // directory holding the .note files (the manager browses it)
 	Server string // path to server.mjs ("" = auto-detect)
 	Node   string // node executable ("" = auto-detect)
 	Port   int    // 0 = pick a free port when the server starts
@@ -78,7 +78,7 @@ func Manager(opts Options) *manager {
 func (m *manager) rescan() {
 	boards, err := notes.Scan(m.opts.Root)
 	if err != nil {
-		m.status.Set("扫描工作区失败：" + err.Error())
+		m.status.Set("扫描目录失败：" + err.Error())
 		return
 	}
 	m.boards.Set(boards)
@@ -207,7 +207,6 @@ func (m *manager) toggleServer(app *tui.App, open bool) {
 	}
 
 	cfg := launcher.Config{
-		Root:     m.opts.Root,
 		ServerJS: m.opts.Server,
 		NodeBin:  m.opts.Node,
 		Port:     m.opts.Port,

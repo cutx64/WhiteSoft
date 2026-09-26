@@ -20,6 +20,7 @@ fs.mkdirSync(SHOTS, { recursive: true });
 const argv = process.argv.slice(2);
 const arg = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
 const CHROME = arg('chrome', path.join(__dirname, '.browsers/chrome/linux-153.0.8010.52/chrome-linux64/chrome'));
+const URL_BASE = arg('url', 'http://127.0.0.1:8787/');
 
 const profileDir = path.join(__dirname, '.chrome-profile-round4');
 fs.rmSync(profileDir, { recursive: true, force: true });
@@ -49,7 +50,7 @@ await page.setCacheEnabled(false);
 page.on('pageerror', (e) => errors.push('pageerror: ' + e.message));
 page.on('console', (m) => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
 
-await page.goto('http://127.0.0.1:8787/', { waitUntil: 'domcontentloaded' });
+await page.goto(URL_BASE, { waitUntil: 'domcontentloaded' });
 await sleep(1500);
 
 const box = await page.$eval('#wb-canvas', (c) => {
@@ -263,6 +264,77 @@ check('小写 n 仍是便签工具', caseCheck.lower === 'sticky', caseCheck.low
 check('Shift+N 新建白板（先弹未保存确认）',
   caseCheck.prompted && caseCheck.after.pages === 1 && caseCheck.after.elements === 0,
   JSON.stringify({ prompted: caseCheck.prompted, after: caseCheck.after }));
+
+/**
+ * A new board has to be repainted immediately.
+ *
+ * The regression: `setDocument()` left the previous document's PDF layer in
+ * place, so the first frame of the new board painted the *old* board's PDF page
+ * — and nothing scheduled another frame, so that picture stayed on screen until
+ * the user touched something.  A fake PDF bitmap stands in for a real imported
+ * PDF here (the renderer only ever draws the bitmap it is handed).
+ */
+console.log('\n[2b] 新白板必须立刻变成空白页');
+const freshBoard = await page.evaluate(async () => {
+  const app = window.app;
+  const ed = app.editor;
+  const els = await import('/js/elements.js');
+  const { Rect } = await import('/js/geometry.js');
+  ed.gotoPage(0);
+  ed.page.elements = [];
+  ed.addElement(els.makeText({ bounds: new Rect(80, 120, 700, 160).toString(), text: '旧白板', fontSize: 84 }), { select: false });
+  // pretend this board came with an imported PDF, exactly like a real one
+  const bitmap = document.createElement('canvas');
+  bitmap.width = 400; bitmap.height = 560;
+  const g = bitmap.getContext('2d');
+  g.fillStyle = '#00A0A0';              // teal, a colour nothing else uses
+  g.fillRect(0, 0, bitmap.width, bitmap.height);
+  const b = ed.boundsOfPage(0);
+  const frame = { pageNumber: 1, bounds: `${b.x},${b.y},${b.w},${b.h}` };
+  ed.page.pdfPages = [frame];
+  ed._pdfPages = [{ ...frame, bitmap }];
+  ed._pdfKey = 'test';
+  // Make the editor behave like it does on a real PDF-backed board: a PDF
+  // document is open and hands out bitmaps, so the cached layer survives
+  // between frames instead of being dropped after the first one.
+  ed.pdf.doc = { numPages: 1 };
+  const realBitmapsFor = ed.pdf.bitmapsFor;
+  ed.pdf.bitmapsFor = async (list) => list.map((p) => ({ ...p, bitmap }));
+  ed.invalidate(); ed.requestRender();
+  await new Promise((r) => setTimeout(r, 600));
+
+  /** Canvas pixels that match the teal of the fake PDF page. */
+  const teal = () => {
+    const c = document.querySelector('#wb-canvas');
+    const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (Math.abs(d[i]) <= 14 && Math.abs(d[i + 1] - 160) <= 16 && Math.abs(d[i + 2] - 160) <= 16) n++;
+    }
+    return n;
+  };
+  const painted = teal();
+  app.markSaved();
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'N', shiftKey: true, bubbles: true }));
+  // read synchronously, before anything can tidy up after the fact
+  const layerRightAfter = ed._pdfPages;
+  delete ed.pdf.doc;
+  ed.pdf.bitmapsFor = realBitmapsFor;
+  await new Promise((r) => setTimeout(r, 1500));      // deliberately no interaction
+  return {
+    painted,
+    tealAfter: teal(),
+    layerRightAfter: layerRightAfter ? layerRightAfter.length : null,
+    pages: ed.doc.pages.length,
+    elements: ed.page.elements.length,
+  };
+});
+check('旧白板确实带着 PDF 背景（测试前提成立）', freshBoard.painted > 20000, String(freshBoard.painted));
+// `layerRightAfter` is read synchronously, so it still shows the *old* board's
+// layer (the switch happens a microtask later) — the canvas is what matters.
+check('Shift+N 之后画布立刻变空白，不会留着上一张板的渲染',
+  freshBoard.tealAfter === 0 && freshBoard.pages === 1 && freshBoard.elements === 0,
+  JSON.stringify(freshBoard));
 
 // Ctrl+Alt+N / Ctrl+Alt+P insert after / before
 const pageKeys = await page.evaluate(async () => {

@@ -10,15 +10,16 @@ import { SceneRenderer } from './render.js';
 import { Rect } from './geometry.js';
 import { scaleElement, rotateElement } from './elements.js';
 import {
-  createDocument, createPage, openNote, openLocalNote, saveNote, listWorkspaceFiles,
+  createDocument, createPage, openLocalNote, writeNoteToHandle, noteBlob,
   importPdfAsPages, referencedResources, manifestFromDocument, LAYOUT_WIDTH,
+  planLocalCompaction,
 } from './document.js';
 import { T } from './elements.js';
 import { beautifySelection } from './tools.js';
 import {
   getPref, setPref, autoSaveLabel, recentFiles, rememberFile, clearRecentFiles, relativeTime,
 } from './prefs.js';
-import { loadFflate } from './zipread.js';
+import { loadFflate, ZipReader } from './zipread.js';
 import {
   handlesSupported, saveHandle, loadHandle, forgetHandle, forgetAllHandles, ensurePermission,
 } from './filehandles.js';
@@ -89,8 +90,20 @@ class App {
   async autoSaveTick() {
     if (!this.autoSaveMinutes || this.saving) return false;
     if (!this.modified) return false;
-    if (!this.editor.doc.path) return false;
+    if (!this.#writableHandle()) return false;
     return this.save({ auto: true, keepEditing: true });
+  }
+
+  /**
+   * The handle Ctrl+S writes into, if the browser gave us one.
+   *
+   * A board opened through `showOpenFilePicker` (or saved once through
+   * `showSaveFilePicker`) owns a real file; a board dragged in from the desktop
+   * has only a read-only snapshot, and asking it for permission would need a
+   * user gesture, so autosave stays quiet in that case.
+   */
+  #writableHandle() {
+    return this.editor.doc.fileHandle || null;
   }
 
   markModified() {
@@ -357,7 +370,7 @@ class App {
     const recent = this.#fileRow({
       icon: '🕘',
       title: '最近使用的文件',
-      desc: '本浏览器打开过的文件，以及工作区里的白板',
+      desc: '这个浏览器打开过的文件，按时间倒序',
       onclick: () => { dlg.close(); this.showRecentDialog(); },
     });
     const body = el('div', {},
@@ -389,7 +402,7 @@ class App {
         const file = await handle.getFile();
         const id = await saveHandle(`f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, handle);
         if (/[.](pdf)$/i.test(file.name)) await this.importPdfFile(file, { handleId: id });
-        else await this.openLocalFile(file, { handleId: id });
+        else await this.openLocalFile(file, { handleId: id, handle });
         return;
       } catch (err) {
         if (err?.name === 'AbortError') return;   // user cancelled the dialog
@@ -409,47 +422,24 @@ class App {
   }
 
   /**
-   * The "最近使用的文件" branch: what this browser opened before (newest
-   * first) plus the boards sitting in the workspace, most recently written
-   * first.
+   * The "最近使用的文件" branch: what this browser opened before, newest first.
+   * Only the *location* is remembered — a file handle when the browser hands
+   * one out, otherwise nothing but the name to re-pick.
    */
   async showRecentDialog() {
-    let workspace = [];
-    try { workspace = await listWorkspaceFiles(); } catch { /* offline is fine */ }
-    const boards = workspace
-      .filter((f) => f.ext === '.note' || f.ext === '.whiteboard')
-      .sort((a, b) => (b.mtime || 0) - (a.mtime || 0));
-
     const remembered = recentFiles();
-    const seen = new Set(remembered.map((r) => r.path));
-    const rest = boards.filter((f) => !seen.has(f.path));
 
     const recentList = el('div', { class: 'wb-filelist' });
     if (!remembered.length) {
       recentList.append(el('p', { class: 'wb-hint', text: '这个浏览器还没有打开过文件。' }));
     }
     for (const r of remembered) {
-      const local = r.source === 'local';
-      const where = r.path || (r.handleId ? '本地文件' : '本地文件');
+      const where = r.handleId ? '已记住位置，可直接打开' : '需重新选择（浏览器不支持记住本地文件）';
       recentList.append(this.#fileRow({
         icon: r.kind === 'pdf' ? '📄' : '📝',
-        title: r.name || r.path,
-        tag: local ? '本地文件' : '工作区',
+        title: r.name,
         desc: [where, r.size ? formatBytes(r.size) : '', relativeTime(r.at)].filter(Boolean).join(' · '),
         onclick: () => { dlg.close(); this.openRecent(r); },
-      }));
-    }
-
-    const workspaceList = el('div', { class: 'wb-filelist' });
-    if (!rest.length) {
-      workspaceList.append(el('p', { class: 'wb-hint', text: boards.length ? '工作区的白板都在上面的列表里了。' : '工作区中没有找到 .note 文件。' }));
-    }
-    for (const f of rest.slice(0, 12)) {
-      workspaceList.append(this.#fileRow({
-        icon: '📝',
-        title: f.path,
-        desc: [f.mtime ? relativeTime(f.mtime) : '', formatBytes(f.size)].filter(Boolean).join(' · '),
-        onclick: () => { dlg.close(); this.loadNote(f.path); },
       }));
     }
 
@@ -469,25 +459,20 @@ class App {
         }) : null,
       ),
       recentList,
-      el('div', { class: 'wb-row' }, el('b', { text: '工作区文件' }),
-        el('span', { class: 'wb-filesize', text: '最近修改优先' })),
-      workspaceList,
       el('p', {
-        class: 'wb-hint', text: '记录只保存文件的位置，不会复制文件：本地文件用浏览器授权的'
-          + '文件句柄记住（Chrome / Edge），再次打开时就地读取原文件；浏览器不支持时则需要重新选择一次。'
-          + '从本机打开的 .note 想留在工作区，请用「另存为」。'
+        class: 'wb-hint', text: '记录只保存文件的位置，不会复制文件：Chrome / Edge 下用浏览器授权的'
+          + '文件句柄记住（再次打开时就地读取原文件），其它浏览器只能请你重新选择一次。',
       }),
     );
     const dlg = this.ui.dialog('最近使用的文件', body, { wide: true });
   }
 
   /**
-   * Open a remembered file: a workspace path, or a local file through the
-   * handle stored for it.  Without a handle the browser gives us no way back
-   * to the file, so the user is asked to point at it again.
+   * Open a remembered file through the handle stored for it.  Without one the
+   * browser gives us no way back to the file, so the user is asked to point at
+   * it again.
    */
   async openRecent(entry) {
-    if (entry.path) return this.loadNote(entry.path);
     const handle = await loadHandle(entry.handleId);
     if (!handle) {
       this.ui.toast(`请重新选择 ${entry.name}（浏览器不会把本地文件路径交给网页）`, 'warn', 3600);
@@ -501,7 +486,7 @@ class App {
       const file = await handle.getFile();
       this.ui.progress('正在打开 ' + file.name + ' …');
       if (entry.kind === 'pdf') await this.importPdfFile(file, { handleId: entry.handleId });
-      else await this.openLocalFile(file, { handleId: entry.handleId });
+      else await this.openLocalFile(file, { handleId: entry.handleId, handle });
       this.ui.progress('');
     } catch (err) {
       this.ui.progress('');
@@ -514,40 +499,6 @@ class App {
     }
   }
 
-  async loadNote(path, { silent = false, confirm = true } = {}) {
-    const ui = this.ui;
-    if (confirm && !(await this.confirmDiscard('打开其他白板'))) return;
-    try {
-      ui.progress('正在打开 ' + path + ' …');
-      const doc = await openNote(path, { onProgress: (m) => ui.progress(m) });
-      const ed = this.editor;
-      ed.resources.setNote(path);   // also drops any archive from a local file
-      if (doc.document?.fileName) {
-        ui.progress('正在载入 PDF 背景…');
-        try {
-          await ed.pdf.open(`/api/note/document?path=${encodeURIComponent(path)}`, 'note:' + path);
-        } catch (err) {
-          console.warn('PDF load failed', err);
-          ui.toast('PDF 背景载入失败：' + err.message, 'warn', 5000);
-        }
-      } else {
-        await ed.pdf.close();
-      }
-      ed.setDocument(doc);
-      this.#afterOpen(doc, {
-        path,
-        name: doc.name,
-        kind: 'note',
-        source: path.startsWith('.cache/') ? 'local' : 'workspace',
-        size: doc.archiveBytes || 0,
-      }, { silent });
-    } catch (err) {
-      ui.progress('');
-      ui.toast('打开失败：' + err.message, 'error', 6000);
-      console.error(err);
-    }
-  }
-
   /**
    * Open a file the user picked from their own disk.
    *
@@ -556,7 +507,7 @@ class App {
    * the location is remembered through `handleId` so the recent list can open
    * the very same file again.
    */
-  async openLocalFile(file, { handleId = null } = {}) {
+  async openLocalFile(file, { handleId = null, handle = null } = {}) {
     const name = file.name.toLowerCase();
     if (!(await this.confirmDiscard('打开其他文件'))) return;
     if (name.endsWith('.note') || name.endsWith('.whiteboard')) {
@@ -578,6 +529,10 @@ class App {
         } else {
           await ed.pdf.close();
         }
+        // Keep the handle: it is what lets Ctrl+S overwrite this very file
+        // instead of asking for a new name.
+        doc.fileHandle = handle || null;
+        doc.fileHandleId = handleId || null;
         ed.setDocument(doc);
         this.#afterOpen(doc, {
           kind: 'note',
@@ -644,9 +599,7 @@ class App {
       // Keep the raw PDF so that "保存 .note" can embed it.
       doc._pdfBytes = bytes;
       doc.name = file.name.replace(/\.pdf$/i, '');
-      doc.path = null;
-      doc.sourcePath = null;
-      ed.resources.setNote(null);
+      ed.resources.setNote();
       ed.resources.clear();
       ed.pdf.docKey = 'local:' + file.name;
       ed.setDocument(doc);
@@ -676,44 +629,71 @@ class App {
    * Save / export
    * ---------------------------------------------------------------- */
   /**
-   * Write the open file.
+   * Write the open board back to its file (Ctrl+S).
+   *
+   * The file is the one the user picked: a writable handle means we overwrite
+   * it in place.  A board that only exists as a read-only snapshot (dragged in,
+   * or a browser without the File System Access API) has nowhere to go, so the
+   * user is asked for a location instead — never silently, and never on the
+   * autosave timer.
    *
    * @param {{auto?: boolean, keepEditing?: boolean}} opts
    *   `auto` tags the toast as an automatic save; `keepEditing` leaves the
    *   inline text editor open (the auto-save timer must not pull it away).
    */
   async save({ auto = false, keepEditing = false } = {}) {
+    const doc = this.editor.doc;
+    if (doc.fileHandle && await ensurePermission(doc.fileHandle, 'readwrite')) {
+      return this.#writeToHandle(doc.fileHandle, { auto, keepEditing });
+    }
+    if (auto) return false;
+    if (doc.localFile) {
+      this.ui.toast('这个浏览器不能写回本地文件，已改为「另存为」', 'warn', 4200);
+    }
+    return this.saveAs();
+  }
+
+  /**
+   * Write the board into `handle` (Ctrl+S on a picked file, or the location
+   * chosen in 另存为 — both are the same operation).
+   */
+  async #writeToHandle(handle, { auto = false, keepEditing = false, adopt = false } = {}) {
     const ed = this.editor;
     const doc = ed.doc;
-    if (!doc.path) return auto ? false : this.saveAs();
     if (this.saving) return false;
     const ui = this.ui;
     this.saving = true;
     try {
-      ui.progress('正在保存 ' + doc.path + ' …');
-      if (!keepEditing && ed.inline?.isEditing) ed.inline.commit(true);
-      const newFiles = await ed.resources.newFilesAsBase64();
+      ui.progress('正在写回 ' + (handle.name || '文件') + ' …');
+      if (ed.inline?.isEditing && !auto && !keepEditing) ed.inline.commit(true);
+      const newFiles = ed.resources.newFilesBytes();
       if (doc._pdfBytes && doc.document?.fileName) {
-        newFiles['Resources/Document/' + doc.document.fileName] = bytesToBase64(doc._pdfBytes);
+        newFiles['Resources/Document/' + doc.document.fileName] = doc._pdfBytes;
       }
-      // A board opened from local disk keeps its pictures inside that file, so
-      // the first save into the workspace has to carry them across.  (Boards
-      // opened from the workspace are handled server-side: `keepAll` copies
-      // every entry of the source archive verbatim.)
-      if (doc.localArchive && doc._localSavedTo !== doc.path) {
-        for (const name of referencedResources(doc)) {
-          if (newFiles[name]) continue;
-          const bytes = await doc.localArchive.read(name);
-          if (bytes) newFiles[name] = bytesToBase64(bytes);
-        }
+      const out = await writeNoteToHandle(doc, handle, { newFiles });
+      // This handle now *is* the board: Ctrl+S, autosave and compaction keep
+      // using it, and the archive snapshot is refreshed because the file on
+      // disk just changed (a stale reader would resurrect dropped entries).
+      doc.fileHandle = handle;
+      try {
+        const fresh = await ZipReader.open(await handle.getFile());
+        doc.localArchive = fresh;
+        ed.resources.swapArchive(fresh);
+      } catch { /* keep the previous snapshot */ }
+      if (adopt) {
+        const name = handle.name || '未命名白板.note';
+        doc.name = name.replace(/\.note$/i, '');
+        doc.localFile = { name, size: out.bytes, lastModified: Date.now() };
+        doc.fileHandleId = await saveHandle(`f${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`, handle);
+        ui.titleInput.value = doc.name;
+        rememberFile({
+          kind: 'note', source: 'local', name, size: out.bytes,
+          lastModified: Date.now(), handleId: doc.fileHandleId,
+        });
       }
-      const out = await saveNote(doc, { target: doc.path, newFiles });
-      if (doc.localArchive) doc._localSavedTo = out.target;
       this.markSaved();
       ui.progress('');
-      ui.toast(auto
-        ? `已自动保存 ${out.target}（${formatBytes(out.bytes)}）`
-        : `已保存 ${out.target}（${formatBytes(out.bytes)}）`, 'ok', auto ? 1800 : 2600);
+      ui.toast(`${auto ? '已自动保存到' : '已保存'} ${out.target}（${formatBytes(out.bytes)}${adopt ? '' : '，就地覆盖原文件'}）`, 'ok', auto ? 1800 : 2800);
       ui.syncStatus();
       return true;
     } catch (err) {
@@ -725,32 +705,199 @@ class App {
     }
   }
 
+  /**
+   * 另存为: ask for a location with the system dialog when the browser has one,
+   * otherwise hand the user a downloaded copy.  Both leave the open board
+   * bound to whatever was written, so the next Ctrl+S behaves as expected.
+   */
   async saveAs() {
-    const doc = this.editor.doc;
-    const input = el('input', { class: 'wb-input', value: `${doc.name || '未命名白板'}.note` });
-    const dlg = this.ui.dialog('另存为 .note', el('div', {},
-      el('p', { class: 'wb-hint', text: '文件会写入工作区。已存在的同名文件将被覆盖。' }),
-      input,
+    const ed = this.editor;
+    const doc = ed.doc;
+    const suggested = `${doc.name || '未命名白板'}.note`;
+    if (typeof window.showSaveFilePicker === 'function') {
+      let handle;
+      try {
+        handle = await window.showSaveFilePicker({
+          suggestedName: suggested,
+          types: [{ description: 'WhiteSoft 白板', accept: { 'application/x-note': ['.note'] } }],
+        });
+      } catch (err) {
+        if (err?.name === 'AbortError') return false;
+        console.warn('showSaveFilePicker 不可用，改为下载副本', err);
+      }
+      if (handle) return this.#writeToHandle(handle, { adopt: true });
+    }
+    // No writable file system access: build the archive and download it.
+    const ui = this.ui;
+    if (this.saving) return false;
+    this.saving = true;
+    ui.progress('正在打包 ' + suggested + ' …');
+    try {
+      if (ed.inline?.isEditing) ed.inline.commit(true);
+      const newFiles = ed.resources.newFilesBytes();
+      if (doc._pdfBytes && doc.document?.fileName) {
+        newFiles['Resources/Document/' + doc.document.fileName] = doc._pdfBytes;
+      }
+      const blob = await noteBlob(doc, { newFiles });
+      download(blob, suggested, 'application/x-note');
+      this.markSaved();
+      ui.progress('');
+      ui.toast(`已下载 ${suggested}（这个浏览器不能直接写回原文件）`, 'ok', 4200);
+      return true;
+    } catch (err) {
+      ui.progress('');
+      ui.toast('另存为失败：' + err.message, 'error', 6000);
+      return false;
+    } finally {
+      this.saving = false;
+    }
+  }
+
+  /* ---------------------------------------------------------------- *
+   * 一键压缩：删掉文件里没有任何对象引用的图片 / PDF
+   * ---------------------------------------------------------------- */
+  /**
+   * Rewrite the saved `.note` without the resources no page refers to.
+   *
+   * The archive is read and rewritten in this page (see zipread.js /
+   * zipwrite.js): untouched entries are copied byte for byte and streamed
+   * straight back into the same file, so a 300 MB board is never held in
+   * memory.  The user sees exactly what would be dropped before anything is
+   * written.
+   *
+   * @returns {Promise<boolean>} true once the preview dialog is up
+   */
+  async compactCurrentNote() {
+    const ed = this.editor;
+    const doc = ed.doc;
+    const ui = this.ui;
+    const file = doc.fileHandle?.name || doc.localFile?.name || `${doc.name || '未命名白板'}.note`;
+    if (!(doc.fileHandle && await ensurePermission(doc.fileHandle, 'readwrite'))) {
+      ui.toast('压缩需要能写回这个文件：请先用「另存为」把它保存到本机（Chrome / Edge 可直接覆盖原文件）', 'warn', 4600);
+      return false;
+    }
+    // Compact what is on disk, so the preview matches the result: unsaved edits
+    // would otherwise still be counted as references.
+    if (this.modified && !(await this.save())) return false;
+
+    ui.progress('正在检查可清理的资源 …');
+    let plan;
+    try {
+      plan = this.#planLocalCompaction();
+    } catch (err) {
+      ui.progress('');
+      ui.toast('检查失败：' + err.message, 'error', 5200);
+      return false;
+    }
+    ui.progress('');
+    const before = plan.size;
+    const bytes = plan.removedBytes;
+    const stored = plan.stored || { count: 0, bytes: 0 };
+    if (!plan.removed.length && !stored.count) {
+      ui.toast(`「${doc.name || file}」没有可清理的资源，已经是最小体积`, 'ok', 3200);
+      return false;
+    }
+
+    const names = plan.removed.slice(0, 5).map((r) => `${r.name.split('/').pop()}（${formatBytes(r.bytes)}）`);
+    const dlg = ui.dialog('一键压缩 .note', el('div', {},
+      el('p', { class: 'wb-hint', text: '文件：' + file }),
+      plan.removed.length
+        ? el('p', {}, el('b', { text: `将删除 ${plan.removed.length} 个没有任何对象引用的资源，省下约 ${formatBytes(bytes)}` }))
+        : null,
+      stored.count
+        ? el('p', {}, el('b', {
+          text: `另有 ${stored.count} 个条目目前是未压缩存放的（${formatBytes(stored.bytes)}），会一并重新压缩`,
+        }))
+        : null,
+      el('p', {
+        class: 'wb-hint',
+        text: (plan.removed.length
+          ? `体积约 ${formatBytes(before)} → 至少 ${formatBytes(Math.max(0, before - bytes))}`
+            + (stored.count ? '（重新压缩后还会更小）' : '')
+          : `体积约 ${formatBytes(before)}，重新压缩后会更小`)
+          + '。只删除 Resources/Images 与 Resources/Document 里没被用到的条目，内容本身不做任何修改。',
+      }),
+      names.length ? el('p', { class: 'wb-hint', text: '例如：' + names.join('、') + (plan.removed.length > names.length ? ` 等 ${plan.removed.length} 个` : '') }) : null,
+      el('p', { class: 'wb-hint', text: '没有额外备份：压缩会直接改写这个文件（写入是原子的，失败不会留下半个文件）。' }),
+      el('p', { class: 'wb-hint', text: '被删除的图片之后无法再从文件里找回，撤销也救不回来。' }),
     ), {
-      actions: [el('button', {
-        class: 'wb-primary', type: 'button', text: '保存',
-        onclick: async () => {
-          const name = input.value.trim();
-          if (!name) return;
-          dlg.close();
-          doc.path = name.endsWith('.note') ? name : name + '.note';
-          await this.save();
-        },
-      })],
+      actions: [
+        el('button', { class: 'wb-toggle', type: 'button', text: '取消', onclick: () => dlg.close() }),
+        el('button', {
+          class: 'wb-primary', type: 'button', text: '开始压缩',
+          onclick: async () => {
+            dlg.close();
+            await this.#runCompaction(plan);
+          },
+        }),
+      ],
     });
-    input.focus();
+    return true;
+  }
+
+  /**
+   * What a compaction of the open board would drop, computed from the archive
+   * the board was read from (its entry list and compressed sizes) and the
+   * resources the pages still reference.
+   */
+  #planLocalCompaction() {
+    const doc = this.editor.doc;
+    const reader = doc.localArchive;
+    const size = doc.archiveBytes || 0;
+    if (!reader) {
+      return { removed: [], removedBytes: 0, size, referencedCount: 0, stored: { count: 0, bytes: 0 } };
+    }
+    const sizeOf = (name) => {
+      const e = reader.entry(name);
+      return e ? (e.csize || e.usize || 0) : 0;
+    };
+    const plan = planLocalCompaction(doc, reader.list(), sizeOf, (name) => reader.entry(name));
+    return {
+      removed: plan.removable.map((r) => ({ name: r.name, bytes: r.bytes })),
+      removedBytes: plan.bytes,
+      size,
+      referencedCount: plan.total - plan.removable.length,
+      stored: plan.stored,
+    };
+  }
+
+  async #runCompaction(plan) {
+    const ed = this.editor;
+    const doc = ed.doc;
+    const ui = this.ui;
+    const file = doc.fileHandle?.name || '本地文件';
+    ui.progress('正在压缩 ' + file + ' …');
+    try {
+      const drop = new Set(plan.removed.map((r) => r.name));
+      // Only resources the board still uses are written back: an image that was
+      // pasted and then deleted must not be resurrected by a compaction.
+      const keep = new Set(referencedResources(doc));
+      const newFiles = {};
+      for (const [name, bytes] of Object.entries(ed.resources.newFilesBytes())) {
+        if (keep.has(name)) newFiles[name] = bytes;
+      }
+      const out = await writeNoteToHandle(doc, doc.fileHandle, { newFiles, drop, recompress: true });
+      try {
+        const fresh = await ZipReader.open(await doc.fileHandle.getFile());
+        doc.localArchive = fresh;
+        ed.resources.swapArchive(fresh);
+      } catch { /* keep the previous snapshot */ }
+      ui.progress('');
+      ui.toast(`已压缩 ${file}：${plan.removed.length ? `删除 ${plan.removed.length} 个未引用的资源，` : ''}`
+        + `${formatBytes(plan.size)} → ${formatBytes(out.bytes)}`
+        + `（省下 ${formatBytes(Math.max(0, plan.size - out.bytes))}）`, 'ok', 4600);
+      ui.syncStatus();
+    } catch (err) {
+      ui.progress('');
+      ui.toast('压缩失败：' + err.message, 'error', 6000);
+    }
   }
 
   async newDocument() {
     if (!(await this.confirmDiscard('新建白板'))) return;
     const ed = this.editor;
     ed.pdf.close();
-    ed.resources.setNote(null);
+    ed.resources.setNote();
     ed.resources.clear();
     const doc = createDocument();
     ed.setDocument(doc);
@@ -899,7 +1046,12 @@ class App {
       const finish = (v) => { if (settled) return; settled = true; dlg.close(); resolve(v); };
       const dlg = this.ui.dialog('有未保存的更改', el('div', {},
         el('p', { class: 'wb-hint', text: `白板「${name}」有未保存的更改，${action}将会丢失这些更改。` }),
-        el('p', { class: 'wb-hint', text: this.editor.doc.path ? `当前文件：${this.editor.doc.path}` : '当前白板还没有保存到文件。' }),
+        el('p', {
+          class: 'wb-hint',
+          text: this.editor.doc.fileHandle?.name
+            ? `当前文件：${this.editor.doc.fileHandle.name}（Ctrl+S 覆盖它）`
+            : (this.editor.doc.localFile ? `当前文件：${this.editor.doc.localFile.name}（只能另存为）` : '当前白板还没有保存到文件。'),
+        }),
       ), {
         actions: [
           el('button', { class: 'wb-toggle', type: 'button', text: '取消', onclick: () => finish(false) }),
@@ -1053,13 +1205,6 @@ function elementBoundsSafe(e) {
   }
   const pad = (e.width || 0) / 2;
   return new Rect(minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2);
-}
-
-function bytesToBase64(bytes) {
-  let s = '';
-  const CH = 0x8000;
-  for (let i = 0; i < bytes.length; i += CH) s += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
-  return btoa(s);
 }
 
 /** Minimal image-only PDF writer (one JPEG per page). */

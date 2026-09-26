@@ -106,6 +106,17 @@ export class Editor {
     this.selection.clear();
     this.history.clear();
     this.version++;
+    // The PDF layer is page state, exactly like `gotoPage` treats it: leaving it
+    // in place painted the *previous* board's PDF page as the first frame of the
+    // new document, and since `syncPdf()` only clears the cache after that frame
+    // was drawn, the stale picture stayed on screen until the user touched
+    // something (`Shift+N` on a PDF-backed board).
+    this._pdfPages = null;
+    this._pdfKey = null;
+    this._loadingPdf = false;
+    this._pdfKeyPending = null;
+    // Whatever the renderer cached belongs to the document that was just closed.
+    this.renderer?.invalidate?.();
     if (keepView) {
       this.camera.zoom = clamp(this.camera.zoom, MIN_ZOOM, MAX_ZOOM);
     } else {
@@ -221,8 +232,13 @@ export class Editor {
     if (this._pdfKey === key) return;
     if (this._loadingPdf) { this._pdfKeyPending = key; return; }
     this._loadingPdf = true;
+    // Rasterising is asynchronous: if the user switches board in the meantime,
+    // this result belongs to a document that is gone and must never be painted
+    // onto the new one.
+    const owner = this.doc;
     this.pdf.bitmapsFor(pages, this.camera.zoom, this.dpr)
       .then((list) => {
+        if (this.doc !== owner) return;
         this._pdfPages = list;
         this._pdfKey = key;
         this._loadingPdf = false;

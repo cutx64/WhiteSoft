@@ -77,6 +77,7 @@ export class ZipReader {
     for (let i = 0; i < entryCount && off + 46 <= cen.length; i++) {
       if (readU32(cen, off) !== CEN_SIG) break;
       const method = readU16(cen, off + 10);
+      const crc = readU32(cen, off + 16);
       let csize = readU32(cen, off + 20);
       let usize = readU32(cen, off + 24);
       const nameLen = readU16(cen, off + 28);
@@ -101,7 +102,7 @@ export class ZipReader {
           e += 4 + sz;
         }
       }
-      entries.set(name, { name, method, csize, usize, offset });
+      entries.set(name, { name, method, csize, usize, offset, crc });
       off += 46 + nameLen + extraLen + commentLen;
     }
     return new ZipReader(file, entries);
@@ -112,6 +113,21 @@ export class ZipReader {
   has(name) { return this.entries.has(name); }
 
   entry(name) { return this.entries.get(name) || null; }
+
+  /**
+   * The entry's bytes exactly as they sit in the file — still compressed.
+   * Copying an untouched entry this way keeps its size and its compression
+   * method, which is what lets an in-place save stay the same size.
+   */
+  async raw(name) {
+    const e = this.entries.get(name);
+    if (!e) return null;
+    const head = new Uint8Array(await this.file.slice(e.offset, e.offset + 30).arrayBuffer());
+    if (head.length < 30 || readU32(head, 0) !== LOC_SIG) throw new Error('损坏的 ZIP 条目：' + name);
+    const start = e.offset + 30 + readU16(head, 26) + readU16(head, 28);
+    const data = new Uint8Array(await this.file.slice(start, start + e.csize).arrayBuffer());
+    return { entry: e, data };
+  }
 
   /** Inflate one entry; returns `null` when the archive has no such name. */
   async read(name) {

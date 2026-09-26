@@ -7,5 +7,11 @@ node_modules/
 test/shots/
 .xdg/
 
+# Scratch workspaces / generated suite copies used when verifying against an
+# isolated server (never part of the repository)
+.tmp-boards/
+.tmp-*/
+test/.tmp-*.mjs
+
 # Go build output of the desktop app
 desktop/whitesoft

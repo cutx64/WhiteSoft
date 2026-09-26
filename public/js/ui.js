@@ -55,6 +55,7 @@ const ICONS = {
   lock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/>',
   unlock: '<rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 7.5-2"/>',
   wand: '<path d="M4 20L16 8"/><path d="M14 3l1 3 3 1-3 1-1 3-1-3-3-1 3-1z"/><path d="M19 13l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>',
+  compress: '<path d="M3 3l7 7M21 3l-7 7M3 21l7-7M21 21l-7-7"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/>',
   more: '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>',
   grid: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/>',
   dots: '<circle cx="6" cy="6" r="1.4"/><circle cx="12" cy="6" r="1.4"/><circle cx="18" cy="6" r="1.4"/><circle cx="6" cy="12" r="1.4"/><circle cx="12" cy="12" r="1.4"/><circle cx="18" cy="12" r="1.4"/><circle cx="6" cy="18" r="1.4"/><circle cx="12" cy="18" r="1.4"/><circle cx="18" cy="18" r="1.4"/>',
@@ -69,6 +70,10 @@ function svg(paths, size = 20) {
   return `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${paths}</svg>`;
 }
 
+/** CSS size of a page preview in the pages panel; rasters are 2× that. */
+const THUMB_W = 56;
+const THUMB_H = 74;
+
 const btn = (icon, title, onClick, cls = '') =>
   el('button', { class: `wb-btn ${cls}`, title, html: svg(ICONS[icon] || icon), onclick: onClick, type: 'button' });
 
@@ -82,7 +87,7 @@ export class UI {
     this.build();
     this.editor.onToolChange = () => this.syncTools();
     this.editor.onSelectionChange = () => this.syncSelection();
-    this.editor.onChange = () => this.syncStatus();
+    this.editor.onChange = () => { this.syncStatus(); this.#scheduleThumbRefresh(); };
     this.editor.onCameraChange = () => this.syncZoom();
   }
 
@@ -399,10 +404,41 @@ export class UI {
     if (show) { this.invalidateThumbs(); this._pagesSig = null; this.syncPages(); }
   }
 
+  /**
+   * Identity of a page object.
+   *
+   * Pages have no id of their own, but the panel needs one to tell "the same
+   * page in another position" from "another page": a preview is a property of
+   * the *page*, not of the row it happens to sit in, and a page list whose
+   * signature ignores the order cannot notice a drag-reorder at all.  Serials
+   * come from a WeakMap, so they are stable for the life of a page object and
+   * vanish with it.
+   */
+  #pageId(page) {
+    if (!this._pageIds) { this._pageIds = new WeakMap(); this._pageSerial = 0; }
+    let id = this._pageIds.get(page);
+    if (id === undefined) {
+      this._pageSerial += 1;
+      id = this._pageSerial;
+      this._pageIds.set(page, id);
+    }
+    return id;
+  }
+
+  /** Cache key of a page index — previews belong to pages, not to positions. */
+  thumbKey(index) {
+    const page = this.editor.doc.pages[index];
+    return page ? this.#pageId(page) : -1;
+  }
+
   #pagesSignature() {
     const ed = this.editor;
     let s = ed.doc.id + '|' + ed.doc.pages.length;
-    for (const p of ed.doc.pages) s += '|' + p.elements.length + ':' + ((p.pdfPages && p.pdfPages.length) || 0);
+    // The per-page identity makes the signature order-sensitive: dragging a page
+    // to another position has to rebuild the list, not just mark it active.
+    for (const p of ed.doc.pages) {
+      s += '|' + this.#pageId(p) + ':' + p.elements.length + ':' + ((p.pdfPages && p.pdfPages.length) || 0);
+    }
     return s;
   }
 
@@ -413,8 +449,14 @@ export class UI {
   }
 
   syncPages() {
-    if (this.pagesPanel.classList.contains('hidden')) return;
     const ed = this.editor;
+    // Previews are keyed by page identity, so a new board can never show an old
+    // one's snapshot; this just frees them when the document changes.
+    if (this._thumbDocId !== ed.doc.id) {
+      this._thumbDocId = ed.doc.id;
+      this.invalidateThumbs();
+    }
+    if (this.pagesPanel.classList.contains('hidden')) return;
     const sig = this.#pagesSignature();
     if (sig === this._pagesSig) { this.#markActivePage(); return; }
     this._pagesSig = sig;
@@ -435,7 +477,7 @@ export class UI {
 
     ed.doc.pages.forEach((page, i) => {
       const thumb = el('canvas', { class: 'wb-thumbcanvas', dataset: { index: String(i) } });
-      thumb.width = 112; thumb.height = 148;
+      thumb.width = THUMB_W * 2; thumb.height = THUMB_H * 2;
       const item = el('div', {
         class: 'wb-pageitem' + (i === ed.pageIndex ? ' active' : ''),
         draggable: 'true',
@@ -475,7 +517,9 @@ export class UI {
 
   /* ---- lazy thumbnail rendering ---- */
   queueThumb(index, canvas) {
-    const key = index;
+    // Keyed by the *page*, not by the row: after a drag-reorder every row still
+    // shows its own page's preview (and no re-render is needed).
+    const key = this.thumbKey(index);
     const cached = this.thumbCache?.get(key);
     if (cached) { canvas.getContext('2d').drawImage(cached, 0, 0, canvas.width, canvas.height); return; }
     if (!this.thumbCache) this.thumbCache = new Map();
@@ -497,25 +541,50 @@ export class UI {
     this.thumbRunning = false;
   }
 
+  /**
+   * One renderer per thumbnail canvas.
+   *
+   * A `SceneRenderer` always draws into the canvas it was constructed with, so
+   * a single shared instance painted every preview into whichever canvas asked
+   * first and left the rest blank.  The map is weak, so renderers disappear
+   * together with the canvases of a rebuilt list.
+   */
+  #thumbRendererFor(canvas) {
+    if (!this._thumbRenderers) this._thumbRenderers = new WeakMap();
+    let renderer = this._thumbRenderers.get(canvas);
+    if (!renderer) {
+      renderer = new SceneRenderer(canvas);
+      this._thumbRenderers.set(canvas, renderer);
+    }
+    return renderer;
+  }
+
   async renderThumb(index, canvas) {
     const ed = this.editor;
     const page = ed.doc.pages[index];
     if (!page) return;
     const b = ed.boundsOfPage(index);
     if (!b.w || !b.h) return;
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const scale = Math.min((112 * dpr) / b.w, (148 * dpr) / b.h);
+    // Rasterise at twice the size of the CSS box: a page preview has to stay
+    // readable on a HiDPI screen without rasterising the page at display size.
+    const scale = Math.min((THUMB_W * 2) / b.w, (THUMB_H * 2) / b.h);
     const cw = Math.max(16, Math.round(b.w * scale));
     const ch = Math.max(16, Math.round(b.h * scale));
     if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
     let pdfPages = (page.pdfPages || []).map((p) => ({ ...p }));
     if (pdfPages.length && ed.pdf.isOpen) {
-      try { pdfPages = await ed.pdf.bitmapsFor(pdfPages, scale, 1); } catch { /* keep frames */ }
+      // …and rasterise the PDF backdrop at that same doubled size, so the
+      // preview shows text instead of grey mush.
+      try { pdfPages = await ed.pdf.bitmapsFor(pdfPages, scale * 2, 1); } catch { /* keep frames */ }
     }
     try { await ed.resources.loadForPage(page); } catch { /* ignore */ }
-    const renderer = this._thumbRenderer || (this._thumbRenderer = new SceneRenderer(canvas));
+    const renderer = this.#thumbRendererFor(canvas);
+    // The viewport is the thumbnail in *device* pixels (dpr 1 below), not the
+    // page's world size: passing the world size made the renderer resize the
+    // canvas to e.g. 1152×1636, draw the page into a corner of it, and the CSS
+    // then squeezed that whole canvas into 46×60 — a blank-looking preview.
     renderer.render({
-      page, camera: { x: b.x, y: b.y, zoom: scale }, view: { w: b.w, h: b.h }, dpr: 1,
+      page, camera: { x: b.x, y: b.y, zoom: scale }, view: { w: cw, h: ch }, dpr: 1,
       version: Math.random(),
       images: ed.resources.images,
       backgroundColor: argbToRgba(ed.doc.backgroundColor || '#FFFFFFFF'),
@@ -525,10 +594,33 @@ export class UI {
     const snap = document.createElement('canvas');
     snap.width = cw; snap.height = ch;
     snap.getContext('2d').drawImage(canvas, 0, 0);
-    this.thumbCache.set(index, snap);
+    this.thumbCache.set(this.#pageId(page), snap);
   }
 
   invalidateThumbs() { this.thumbCache?.clear(); }
+
+  /** Re-render one page's preview (drops the snapshot, repaints if on screen). */
+  invalidateThumb(index) {
+    this.thumbCache?.delete(this.thumbKey(index));
+    const canvas = this.pagesList?.querySelector(`.wb-thumbcanvas[data-index="${index}"]`);
+    if (canvas) this.queueThumb(index, canvas);
+  }
+
+  /**
+   * Refresh the *current* page's preview once edits have settled.
+   *
+   * `onChange` fires during drags and per keystroke, so the repaint is
+   * debounced: the panel then follows what the user just drew without
+   * re-rendering a preview on every pointer event.
+   */
+  #scheduleThumbRefresh() {
+    if (this.pagesPanel.classList.contains('hidden')) return;
+    clearTimeout(this._thumbTimer);
+    this._thumbTimer = setTimeout(() => {
+      this._thumbTimer = null;
+      this.invalidateThumb(this.editor.pageIndex);
+    }, 350);
+  }
 
   /* ---------------------------------------------------------------- *
    * Fly-outs
@@ -955,6 +1047,7 @@ export class UI {
       row('trash', '清空当前画纸', () => this.app.clearPage()),
       row('plus', '新建白板', () => this.app.newDocument()),
       row('save', '另存为 .note 文件…', () => this.app.saveAs()),
+      row('compress', '一键压缩 .note（删除未引用的资源）', () => this.app.compactCurrentNote()),
     );
     this.openFlyout(anchor, content, { title: '更多' });
   }
@@ -1191,6 +1284,7 @@ export class UI {
         mk('PDF 文档', `导出全部 ${ed.pageCount} 张画纸为一个 PDF`, () => app.exportPdf()),
         mk('Zip (HTML + JSON)', '导出白板数据与资源，便于二次处理', () => app.exportZip()),
         mk('另存为 .note', '保存成一个新的 .note 文件，不动原文件', () => app.saveAs()),
+        mk('一键压缩 .note', '删除文件里没有任何对象引用的图片等资源，缩小文件体积', () => app.compactCurrentNote()),
       ),
       el('p', { class: 'wb-hint', text: '提示：Ctrl+S 保存会覆盖当前打开的 .note；想保留原件请用「另存为」。保存后的文件可直接用 Microsoft Whiteboard 打开。' }),
     );
