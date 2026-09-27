@@ -628,6 +628,150 @@ const saveAsUi = await page.evaluate(() => {
 });
 check('标题栏有「另存为」按钮', saveAsUi);
 
+/* ---------------------------------------------------------------- *
+ * Where a page is framed when it has no PDF backdrop
+ * ---------------------------------------------------------------- */
+console.log('\n[9] 无 PDF 背景的页面从左上角开始显示');
+const framing = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const els = await import('/js/elements.js');
+  const { Rect } = await import('/js/geometry.js');
+  const mkPage = (pdf, blocks) => ({
+    elements: blocks.map(([x, y, w, h]) => els.makePointsElement(els.T.RECT, {
+      stroke: '#FF1F1F1F', width: 2, closed: true,
+      points: [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }],
+    })),
+    scale: 1,
+    pdfPages: pdf ? [{ pageNumber: 1, bounds: `${pdf.x},${pdf.y},${pdf.w},${pdf.h}` }] : [],
+  });
+  // a wide collage without a backdrop, a narrow sketch without one, a PDF page
+  // whose content stays on the paper, and two pages whose content spills out of
+  // the paper (the shape real boards have: scans pasted next to each other)
+  const wide = mkPage(null, [[-200, -100, 1200, 900], [1100, -100, 1200, 900], [2000, 900, 1200, 900]]);
+  const narrow = mkPage(null, [[400, 300, 300, 200]]);
+  const framed = mkPage({ x: 0, y: 0, w: 1437, h: 2040 }, [[100, 100, 300, 200]]);
+  const spill = mkPage({ x: 285, y: 103, w: 1437, h: 2040 }, [[-173, -93, 1200, 900], [1100, 700, 1400, 1900]]);
+  const paperAbove = mkPage({ x: 0, y: -900, w: 1437, h: 2040 }, [[0, 0, 1100, 900], [1200, 200, 1100, 900]]);
+  // real boards (Al-jabr-2 page 555): the leftmost column starts lower than a
+  // column further right — the page must start at the *leftmost* column
+  const tallerRight = mkPage(null, [[0, 300, 800, 1600], [950, -400, 800, 2400]]);
+  ed.doc.pages = [wide, narrow, framed, spill, paperAbove, tallerRight];
+  ed.doc.currentPage = 0;
+
+  /** Screen position of the top-left corner of a page's content. */
+  const corner = (i) => {
+    const b = ed.boundsOfPage(i);
+    return { p: ed.worldToScreen(b.left, b.top), frame: { x: b.x, y: b.y, w: b.w, h: b.h } };
+  };
+  const out = {};
+  for (const [name, index] of [['wide', 0], ['narrow', 1], ['framed', 2], ['spill', 3], ['paperAbove', 4], ['tallerRight', 5]]) {
+    ed.camera.zoom = 0.8;
+    ed.gotoPage(index);
+    await new Promise((r) => setTimeout(r, 150));
+    const c = corner(index);
+    out[name] = {
+      zoom: ed.camera.zoom,
+      screenX: Math.round(c.p.x),
+      screenY: Math.round(c.p.y),
+      viewW: ed.view.w,
+      frameW: Math.round(c.frame.w),
+      // what a centred view would have shown instead
+      centredX: Math.round(c.p.x + (ed.view.w / 2 / ed.camera.zoom - c.frame.w / 2) * ed.camera.zoom),
+    };
+  }
+  // 显示整页 must still frame everything (centred), wide page or not
+  ed.gotoPage(0);
+  ed.fitPage();
+  await new Promise((r) => setTimeout(r, 150));
+  const fit = corner(0);
+  out.fit = {
+    screenX: Math.round(fit.p.x),
+    screenY: Math.round(fit.p.y),
+    zoom: Number(ed.camera.zoom.toFixed(3)),
+    visible: fit.frame.w * ed.camera.zoom <= ed.view.w + 1,
+  };
+  void Rect;
+  return out;
+});
+check('无 PDF 且内容比窗口宽：视口对到内容的左上角（不再从中段开始）',
+  Math.abs(framing.wide.screenX - 12) <= 2 && Math.abs(framing.wide.screenY - 12) <= 2
+  && framing.wide.centredX < -100,
+  JSON.stringify(framing.wide));
+check('无 PDF 但内容比窗口窄：仍然居中显示（原来的手感不变）',
+  framing.narrow.screenX > 100 && Math.abs(framing.narrow.screenY - 12) <= 2,
+  JSON.stringify(framing.narrow));
+check('带 PDF 背景的页面仍然居中（纸面框住窗口）',
+  Math.abs(framing.framed.screenX - (framing.framed.viewW - framing.framed.frameW * 0.8) / 2) <= 3,
+  JSON.stringify(framing.framed));
+check('「显示整页」(Ctrl+Shift+0) 依然把整页框进窗口',
+  framing.fit.visible === true && framing.fit.zoom < 0.8,
+  JSON.stringify(framing.fit));
+
+// pages 228 和 302 of a real board: a blank PDF sheet with scans pasted over it,
+// spilling far outside the paper — those must start at the content too
+const spill = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const els = await import('/js/elements.js');
+  const out = {};
+  for (const [name, index] of [['spill', 3], ['paperAbove', 4]]) {
+    ed.camera.zoom = 0.8;
+    ed.gotoPage(index);
+    await new Promise((r) => setTimeout(r, 150));
+    const p = ed.doc.pages[index];
+    let content = null;
+    for (const e of p.elements) {
+      const b = els.elementBounds(e);
+      content = content ? content.union(b) : b;
+    }
+    const screen = ed.worldToScreen(content.left, content.top);
+    const union = ed.boundsOfPage(index);
+    const paper = ed.doc.pages[index].pdfPages[0].bounds.split(',').map(Number);
+    out[name] = {
+      contentOnScreen: { x: Math.round(screen.x), y: Math.round(screen.y) },
+      content: { x: Math.round(content.x), y: Math.round(content.y), w: Math.round(content.w), h: Math.round(content.h) },
+      frame: { x: Math.round(union.x), y: Math.round(union.y), w: Math.round(union.w), h: Math.round(union.h) },
+      paper: { x: paper[0], y: paper[1], w: paper[2], h: paper[3] },
+    };
+  }
+  return out;
+});
+check('PDF 纸面上有溢出到纸外的内容时，也从内容左上角开始（真实文件 228/302 的情形）',
+  Math.abs(spill.spill.contentOnScreen.x - 12) <= 2 && Math.abs(spill.spill.contentOnScreen.y - 12) <= 2
+  && spill.spill.frame.w > spill.spill.paper.w,
+  JSON.stringify(spill.spill));
+check('纸面比内容更靠上时，以内容为准（纸面的空白顶部不占着首屏）',
+  Math.abs(spill.paperAbove.contentOnScreen.y - 12) <= 2
+  && spill.paperAbove.content.y > spill.paperAbove.paper.y + 100,
+  JSON.stringify(spill.paperAbove));
+
+// the standard is "the top of the *leftmost* content": a column further right
+// may reach higher, and the page must not start with a blank corner because of it
+const leftmost = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const els = await import('/js/elements.js');
+  ed.camera.zoom = 0.8;
+  ed.gotoPage(5);
+  await new Promise((r) => setTimeout(r, 150));
+  const p = ed.doc.pages[5];
+  const boxes = p.elements.map((e) => els.elementBounds(e));
+  const left = Math.min(...boxes.map((b) => b.left));
+  const leftColumnTop = Math.min(...boxes.filter((b) => b.left <= left + 10).map((b) => b.top));
+  const otherTop = Math.min(...boxes.filter((b) => b.left > left + 10).map((b) => b.top));
+  const anchor = ed.anchorOfPage(5);
+  const screen = ed.worldToScreen(left, anchor.top);
+  return {
+    leftColumnTop, otherTop, anchorTop: anchor.top,
+    anchorOnScreen: { x: Math.round(screen.x), y: Math.round(screen.y) },
+    otherTopOnScreen: Math.round(ed.worldToScreen(left + 950, otherTop).y),
+  };
+});
+check('以「最左侧内容的最上侧」为准：右边更高的列不会让左上角留白',
+  leftmost.anchorTop === leftmost.leftColumnTop
+  && Math.abs(leftmost.anchorOnScreen.y - 12) <= 2
+  && leftmost.otherTop < leftmost.leftColumnTop
+  && leftmost.otherTopOnScreen < 0,
+  JSON.stringify(leftmost));
+
 await page.screenshot({ path: path.join(SHOTS, 'r3-final.png') });
 await browser.close();
 await fixtures.close();

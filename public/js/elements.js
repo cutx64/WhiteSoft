@@ -359,6 +359,45 @@ export function translateElement(e, dx, dy) {
  * Scale an element about `origin`.
  * `sx`/`sy` may be negative when a selection is flipped.
  */
+/**
+ * Is this highlighter a single straight band?
+ *
+ * The highlighter's "draw straight lines" mode marks its strokes with
+ * `cap: 'round'`, and a `.note` written by Microsoft Whiteboard may hold a
+ * two-point (or fully collinear) highlighter instead — both render as a straight
+ * band with semicircular ends.  Such a band keeps its width when the selection
+ * is scaled: stretching it changes how far it reaches, not how thick the pen
+ * was when it was drawn.
+ */
+export function isStraightHighlight(e) {
+  if (!e || e.type !== T.HIGHLIGHTER) return false;
+  if (e.cap === 'round') return true;
+  if (e.cap === 'butt') return false;
+  const pts = elementPoints(e);
+  if (pts.length < 2) return false;
+  if (pts.length === 2) return true;
+  const a = pts[0];
+  const b = pts[pts.length - 1];
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (len < 1e-6) return false;
+  const tol = Math.max(len * 0.004, 1e-3);
+  return pts.every((p) => distToSegment(p.x, p.y, a.x, a.y, b.x, b.y) <= tol);
+}
+
+/** Should scaling this element also change its stroke width? */
+export function strokeScalesWithElement(e, sx, sy) {
+  if (!flipStrokeWidth(e, sx, sy)) return 1;
+  return Math.sqrt(Math.abs(sx * sy)) || 1;
+}
+
+function flipStrokeWidth(e, sx, sy) {
+  if (Math.abs(Math.sqrt(Math.abs(sx * sy)) - 1) <= 0.001) return false;
+  if (e.width == null) return false;
+  if (e.type === T.INK) return true;
+  if (e.type === T.HIGHLIGHTER) return !isStraightHighlight(e);
+  return false;
+}
+
 export function scaleElement(e, sx, sy, origin, { flipStroke = true } = {}) {
   const f = (x, y) => ({ x: origin.x + (x - origin.x) * sx, y: origin.y + (y - origin.y) * sy });
   if (e.bounds != null) {
@@ -377,9 +416,9 @@ export function scaleElement(e, sx, sy, origin, { flipStroke = true } = {}) {
       return { point: `${r4(q.x)},${r4(q.y)}` };
     });
   }
-  if (flipStroke && e.width != null && (e.type === T.INK || e.type === T.HIGHLIGHTER)) {
-    const s = Math.sqrt(Math.abs(sx * sy)) || 1;
-    if (Math.abs(s - 1) > 0.001) e.width = r4(e.width * s);
+  if (flipStroke) {
+    const s = strokeScalesWithElement(e, sx, sy);
+    if (s !== 1) e.width = r4(e.width * s);
   }
 }
 

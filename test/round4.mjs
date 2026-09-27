@@ -554,6 +554,142 @@ const bottom = await page.evaluate(async () => {
 check('操作栏“移到图层最底层”', bottom.found && bottom.index === 0, JSON.stringify(bottom));
 await page.screenshot({ path: path.join(SHOTS, 'r4-image-bottom.png') });
 
+/* ================================================================ *
+ * 5. A straight highlighter keeps its width when scaled
+ * ================================================================ */
+console.log('\n[5] 直线高亮缩放时宽度不变');
+const hlSetup = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const els = await import('/js/elements.js');
+  // earlier sections leave fly-outs and the action bar around; a stray panel
+  // over the handle would swallow the drag
+  window.app.ui.closeFlyout();
+  window.app.ui.closeDialog();
+  ed.selection.clear();
+  ed.onSelectionChange?.();
+  ed.gotoPage(0);
+  ed.highlighter.color = '#5AFED42F';
+  ed.highlighter.width = 30;
+  ed.highlighter.straight = true;
+  ed.setTool('highlighter');
+  ed.page.elements = [];
+  ed.selection.clear();
+  ed.invalidate();
+  await new Promise((r) => setTimeout(r, 250));
+  return { tool: ed.tool, straight: ed.highlighter.straight, zoom: ed.camera.zoom };
+});
+await page.mouse.move(box.x + 260, box.y + 260);
+await page.mouse.down();
+await page.mouse.move(box.x + 620, box.y + 360, { steps: 10 });
+await page.mouse.up();
+await sleep(400);
+
+const drawn = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const els = await import('/js/elements.js');
+  const e = ed.page.elements[0];
+  const pts = els.elementPoints(e);
+  ed.setTool('select');            // handles belong to the select tool
+  ed.selection.clear();
+  ed.selection.add(e);
+  ed.onSelectionChange?.();
+  ed.requestRender();
+  await new Promise((r) => setTimeout(r, 200));
+  const f = ed.selectionFrame();
+  return {
+    type: e.type, cap: e.cap, width: e.width, straight: els.isStraightHighlight(e),
+    length: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y),
+    // screen position of the top-left handle (the action bar hangs below the
+    // selection and would swallow a drag on the bottom corner)
+    handle: ed.worldToScreen(f.local.left, f.local.top),
+  };
+});
+check('用「直线绘制」画出的高亮是直带（宽度 = 工具栏 30 / 缩放）',
+  drawn.type === 100005 && drawn.cap === 'round' && drawn.straight === true
+  && Math.abs(drawn.width - 30 / hlSetup.zoom) < 0.01,
+  JSON.stringify({ ...drawn, zoom: hlSetup.zoom }));
+
+// drag the corner handle outwards with the mouse (the real resize path)
+const canvasBox = await page.$eval('#wb-canvas', (c) => { const r = c.getBoundingClientRect(); return { x: r.x, y: r.y }; });
+const hitHandle = await page.evaluate(async (p) => {
+  const ed = window.app.editor;
+  return ed.handleAt({ x: p.x, y: p.y });
+}, drawn.handle);
+check('手柄可以被抓取（测试前提成立）', hitHandle !== null, String(hitHandle));
+await page.mouse.move(canvasBox.x + drawn.handle.x, canvasBox.y + drawn.handle.y);
+await page.mouse.down();
+await page.mouse.move(canvasBox.x + drawn.handle.x - 260, canvasBox.y + drawn.handle.y - 120, { steps: 10 });
+await page.mouse.up();
+await sleep(400);
+const afterDrag = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const els = await import('/js/elements.js');
+  const e = ed.page.elements[0];
+  const pts = els.elementPoints(e);
+  return {
+    width: e.width,
+    length: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y),
+    history: ed.history.undoLabel,
+  };
+});
+check('拖手柄放大后：宽度一点没变，只变长',
+  Math.abs(afterDrag.width - drawn.width) < 0.01 && afterDrag.length > drawn.length + 50,
+  JSON.stringify({ before: { width: drawn.width, length: drawn.length }, after: afterDrag }));
+
+// the axis resize (Shift+Alt+arrows) goes through scaleElement()
+const afterAxial = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const els = await import('/js/elements.js');
+  const e = ed.page.elements[0];
+  ed.selection.clear();
+  ed.selection.add(e);
+  ed.onSelectionChange?.();
+  const b = ed.selectionBounds();
+  els.scaleElement(e, 2, 1, { x: b.left, y: b.top });
+  return { width: e.width };
+});
+check('沿一个方向再放大 2 倍，宽度仍不变',
+  Math.abs(afterAxial.width - drawn.width) < 0.01, JSON.stringify(afterAxial));
+
+// freehand highlights keep the old behaviour (width follows the scale), and so
+// does a straight *pen* stroke — only highlighter bands were asked to stay put
+const others = await page.evaluate(async () => {
+  const els = await import('/js/elements.js');
+  const free = els.makePointsElement(els.T.HIGHLIGHTER, {
+    stroke: '#5AFED42F', width: 30, closed: false,
+    points: Array.from({ length: 20 }, (_, i) => ({ x: 200 + i * 20, y: 500 + Math.sin(i / 3) * 40 })),
+  });
+  const freeBefore = { width: free.width, straight: els.isStraightHighlight(free) };
+  els.scaleElement(free, 2, 2, { x: 0, y: 0 });
+
+  // a collinear highlight from an old file (no `cap` marker) counts as straight
+  const legacy = els.makePointsElement(els.T.HIGHLIGHTER, {
+    stroke: '#5AFED42F', width: 30, closed: false,
+    points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 200, y: 0 }],
+  });
+  const legacyBefore = { width: legacy.width, straight: els.isStraightHighlight(legacy) };
+  els.scaleElement(legacy, 3, 3, { x: 0, y: 0 });
+
+  const pen = els.makeInk({ stroke: '#FF000000', width: 6, points: [{ x: 0, y: 0 }, { x: 100, y: 0 }] });
+  const penBefore = pen.width;
+  els.scaleElement(pen, 2, 2, { x: 0, y: 0 });
+
+  return {
+    free: { ...freeBefore, after: free.width },
+    legacy: { ...legacyBefore, after: legacy.width },
+    pen: { before: penBefore, after: pen.width },
+  };
+});
+check('自由手绘高亮仍然跟着缩放变粗（原行为不变）',
+  others.free.straight === false && Math.abs(others.free.after - 60) < 0.01,
+  JSON.stringify(others.free));
+check('老文件里「共线」高亮也享受同一条规则',
+  others.legacy.straight === true && others.legacy.after === 30, JSON.stringify(others.legacy));
+check('直线笔迹（INK）不受影响，依旧按比例缩放',
+  Math.abs(others.pen.after - 12) < 0.01, JSON.stringify(others.pen));
+
+await page.screenshot({ path: path.join(SHOTS, 'r4-highlighter-width.png') });
+
 await browser.close();
 
 const failed = results.filter((r) => !r.ok);

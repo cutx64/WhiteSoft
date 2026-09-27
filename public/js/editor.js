@@ -134,15 +134,26 @@ export class Editor {
   /**
    * Put the current page in view without touching the zoom, so the zoom the
    * user picked on one page carries over to every other page.
+   *
+   * A sheet of paper is centred: an imported PDF page, or a board whose content
+   * stays inside it, is framed left-right like a page on a desk.  But when the
+   * framed area is *wider than the window* — a collage of scans pasted next to
+   * each other, a page without any backdrop — centring would push the beginning
+   * of the page off-screen, so the view is aligned to its **top-left corner**
+   * and the rest runs off to the right/bottom.
    */
   centerPage({ align = 'top' } = {}) {
     const target = this.boundsOfPage(this.pageIndex);
     if (!target || !target.w) return;
     const z = this.camera.zoom;
-    this.camera.x = target.cx - this.view.w / 2 / z;
+    const anchor = this.anchorOfPage(this.pageIndex) || target;
+    const widerThanWindow = anchor.w * z > this.view.w;
+    this.camera.x = align === 'top' && widerThanWindow
+      ? anchor.left - 12 / z
+      : target.cx - this.view.w / 2 / z;
     this.camera.y = align === 'middle'
       ? target.cy - this.view.h / 2 / z
-      : target.top - 12 / z;
+      : anchor.top - 12 / z;
     this.onCameraChange?.();
   }
 
@@ -301,17 +312,72 @@ export class Editor {
     return this.boundsOfPage(this.pageIndex);
   }
 
-  /** World rect worth framing for an arbitrary page (PDF backdrop wins). */
-  boundsOfPage(index) {
+  /** The page's paper (its PDF backdrop) and its content, in world units. */
+  #pageRects(index) {
     const p = this.doc.pages[index];
-    if (!p) return new Rect(0, 0, 1280, 720);
-    let r = new Rect();
-    let any = false;
-    for (const pp of p.pdfPages || []) { const b = Rect.parse(pp.bounds); r = any ? r.union(b) : b; any = true; }
-    if (any && r.w > 0 && r.h > 0) return r;
-    for (const e of p.elements) { const b = elementBounds(e); r = any ? r.union(b) : b; any = true; }
-    if (!any) return new Rect(-this.view.w / 2, -this.view.h / 2, this.view.w, this.view.h);
-    return r;
+    let paper = null;
+    let content = null;
+    if (p) {
+      for (const pp of p.pdfPages || []) {
+        const b = Rect.parse(pp.bounds);
+        if (b.w > 0 && b.h > 0) paper = paper ? paper.union(b) : b;
+      }
+      for (const e of p.elements) {
+        const b = elementBounds(e);
+        content = content ? content.union(b) : b;
+      }
+    }
+    return { paper, content };
+  }
+
+  /**
+   * World rect worth framing for an arbitrary page.
+   *
+   *  - a page with an imported PDF is framed by its paper — that is the sheet
+   *    the annotations were made on;
+   *  - a page **without** a backdrop has no paper at all, so its content is the
+   *    page;
+   *  - and when the content spills *outside* the paper (scans pasted next to
+   *    each other, a note hanging over the edge, ink drawn beyond the sheet),
+   *    the framing follows the content — otherwise the beginning of the page
+   *    would sit off-screen.
+   */
+  boundsOfPage(index) {
+    const { paper, content } = this.#pageRects(index);
+    if (!this.doc.pages[index]) return new Rect(0, 0, 1280, 720);
+    if (paper && content && !paper.containsRect(content)) return paper.union(content);
+    if (paper) return paper;
+    if (content) return content;
+    return new Rect(-this.view.w / 2, -this.view.h / 2, this.view.w, this.view.h);
+  }
+
+  /**
+   * Where a page starts when the view is put on it.
+   *
+   * Normally that is the top-left of the sheet of paper.  When the content
+   * spills outside the paper — or there is no paper at all — the page starts at
+   * its **leftmost content**, and at the top of that leftmost column rather
+   * than at the global top of the page: a column further right (or a single
+   * tall picture) may reach higher, and anchoring there would push the page's
+   * real beginning down and leave a blank strip in the top-left corner.
+   */
+  anchorOfPage(index) {
+    const { paper, content } = this.#pageRects(index);
+    const spills = !!content && (!paper || !paper.containsRect(content));
+    if (!content) return paper ? { left: paper.left, top: paper.top, w: paper.w } : null;
+    if (!spills) return { left: paper.left, top: paper.top, w: paper.w };
+    // Everything that starts at the left edge, give or take a sliver, counts as
+    // the leftmost column (scans pasted side by side rarely line up exactly).
+    const strip = Math.max(4, Math.min(content.w * 0.04, 160));
+    let top = null;
+    for (const e of this.doc.pages[index].elements) {
+      const b = elementBounds(e);
+      if (b.left > content.left + strip) continue;
+      top = top == null ? b.top : Math.min(top, b.top);
+    }
+    // `top` is null only for a page whose elements vanished between the two
+    // passes; the content top is then the best answer available.
+    return { left: content.left, top: top == null ? content.top : top, w: content.w };
   }
 
   fitPageWidth() {

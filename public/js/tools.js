@@ -14,6 +14,7 @@ import { clamp, clone } from './util.js';
 import {
   T, makeInk, makePointsElement, makeText, makeSticky, makeTable, makeReaction,
   hitTest, elementBounds, localBounds, elementPoints, translateElement, scaleElement, rotateElement,
+  strokeScalesWithElement,
   ellipsePointsFromRect, polygonPointsFor, curvePointsFor, IS_OBJECT,
 } from './elements.js';
 
@@ -774,10 +775,10 @@ function scaleElementRotated(e, sx, sy, pivotLocal, rot, bounds) {
     e.bounds = nr.toString();
     if (!IS_OBJECT.has(e.type)) e.rotation = 0;
   }
-  if ((e.type === T.INK || e.type === T.HIGHLIGHTER) && e.width) {
-    const s = Math.sqrt(Math.abs(sx * sy)) || 1;
-    if (Math.abs(s - 1) > 1e-3) e.width = r4(e.width * s);
-  }
+  // Freehand ink follows the scale; a straight highlighter band keeps the width
+  // it was drawn with (see `isStraightHighlight`).
+  const s = strokeScalesWithElement(e, sx, sy);
+  if (s !== 1 && e.width) e.width = r4(e.width * s);
 }
 
 const r4 = (v) => Number(Number(v).toFixed(4));
