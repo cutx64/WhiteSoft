@@ -650,12 +650,19 @@ const framing = await page.evaluate(async () => {
   const wide = mkPage(null, [[-200, -100, 1200, 900], [1100, -100, 1200, 900], [2000, 900, 1200, 900]]);
   const narrow = mkPage(null, [[400, 300, 300, 200]]);
   const framed = mkPage({ x: 0, y: 0, w: 1437, h: 2040 }, [[100, 100, 300, 200]]);
+  // PDF pages: one whose ink spills far outside the paper, one whose paper sits
+  // above its content, and one with no ink at all — all keep the paper view
   const spill = mkPage({ x: 285, y: 103, w: 1437, h: 2040 }, [[-173, -93, 1200, 900], [1100, 700, 1400, 1900]]);
   const paperAbove = mkPage({ x: 0, y: -900, w: 1437, h: 2040 }, [[0, 0, 1100, 900], [1200, 200, 1100, 900]]);
+  const emptyPaper = mkPage({ x: 0, y: 0, w: 1437, h: 2040 }, []);
+  // …and one whose PDF sheet is *all white*: that counts as no backdrop at all,
+  // so the content decides the framing (real boards: Al-jabr-2 pages 228/302).
+  // The flag itself is filled in by the app once it has looked at the sheet.
+  const blankSheet = mkPage({ x: 285, y: 103, w: 1437, h: 2040 }, [[-173, -93, 1200, 900], [1100, 700, 1400, 1900]]);
   // real boards (Al-jabr-2 page 555): the leftmost column starts lower than a
   // column further right — the page must start at the *leftmost* column
   const tallerRight = mkPage(null, [[0, 300, 800, 1600], [950, -400, 800, 2400]]);
-  ed.doc.pages = [wide, narrow, framed, spill, paperAbove, tallerRight];
+  ed.doc.pages = [wide, narrow, framed, spill, paperAbove, tallerRight, emptyPaper, blankSheet];
   ed.doc.currentPage = 0;
 
   /** Screen position of the top-left corner of a page's content. */
@@ -664,7 +671,10 @@ const framing = await page.evaluate(async () => {
     return { p: ed.worldToScreen(b.left, b.top), frame: { x: b.x, y: b.y, w: b.w, h: b.h } };
   };
   const out = {};
-  for (const [name, index] of [['wide', 0], ['narrow', 1], ['framed', 2], ['spill', 3], ['paperAbove', 4], ['tallerRight', 5]]) {
+  for (const [name, index] of [
+    ['wide', 0], ['narrow', 1], ['framed', 2], ['spill', 3],
+    ['paperAbove', 4], ['tallerRight', 5], ['emptyPaper', 6], ['blankSheet', 7],
+  ]) {
     ed.camera.zoom = 0.8;
     ed.gotoPage(index);
     await new Promise((r) => setTimeout(r, 150));
@@ -735,42 +745,93 @@ const spill = await page.evaluate(async () => {
   }
   return out;
 });
-check('PDF 纸面上有溢出到纸外的内容时，也从内容左上角开始（真实文件 228/302 的情形）',
-  Math.abs(spill.spill.contentOnScreen.x - 12) <= 2 && Math.abs(spill.spill.contentOnScreen.y - 12) <= 2
-  && spill.spill.frame.w > spill.spill.paper.w,
-  JSON.stringify(spill.spill));
-check('纸面比内容更靠上时，以内容为准（纸面的空白顶部不占着首屏）',
-  Math.abs(spill.paperAbove.contentOnScreen.y - 12) <= 2
-  && spill.paperAbove.content.y > spill.paperAbove.paper.y + 100,
-  JSON.stringify(spill.paperAbove));
+// Pages with a PDF backdrop keep the view they always had: the sheet of paper,
+// centred, its top at the top — no matter what was drawn or pasted on it.
+const paperView = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const out = {};
+  for (const [name, index] of [['spill', 3], ['paperAbove', 4], ['emptyPaper', 6]]) {
+    ed.camera.zoom = 0.8;
+    ed.gotoPage(index);
+    await new Promise((r) => setTimeout(r, 150));
+    const p = ed.doc.pages[index];
+    const paper = p.pdfPages[0].bounds.split(',').map(Number);
+    const frame = ed.boundsOfPage(index);
+    const corner = ed.worldToScreen(frame.left, frame.top);
+    out[name] = {
+      frameW: Math.round(frame.w),
+      paperW: Math.round(paper[2]),
+      frameOnScreen: { x: Math.round(corner.x), y: Math.round(corner.y) },
+      centredX: (ed.view.w - frame.w * ed.camera.zoom) / 2,
+      elements: p.elements.length,
+    };
+  }
+  return out;
+});
+check('有 PDF 背景的页面按纸面显示（笔迹溢出纸外也不改）',
+  paperView.spill.frameW === paperView.spill.paperW
+  && Math.abs(paperView.spill.frameOnScreen.x - paperView.spill.centredX) <= 2
+  && Math.abs(paperView.spill.frameOnScreen.y - 12) <= 2,
+  JSON.stringify(paperView.spill));
+check('纸面比内容更靠上时同样按纸面显示',
+  paperView.paperAbove.frameW === paperView.paperAbove.paperW
+  && Math.abs(paperView.paperAbove.frameOnScreen.x - paperView.paperAbove.centredX) <= 2,
+  JSON.stringify(paperView.paperAbove));
+check('有 PDF 背景但没有笔迹的页面，显示方式和以前一模一样',
+  paperView.emptyPaper.elements === 0
+  && paperView.emptyPaper.frameW === paperView.emptyPaper.paperW
+  && Math.abs(paperView.emptyPaper.frameOnScreen.x - paperView.emptyPaper.centredX) <= 2
+  && Math.abs(paperView.emptyPaper.frameOnScreen.y - 12) <= 2,
+  JSON.stringify(paperView.emptyPaper));
 
-// the standard is "the top of the *leftmost* content": a column further right
-// may reach higher, and the page must not start with a blank corner because of it
-const leftmost = await page.evaluate(async () => {
+// A PDF sheet that is blank white is not a backdrop: such a page is framed by
+// its content, exactly like a page without any PDF at all.  The page is built
+// here so nothing can have looked at it before, and the PDF detector is stubbed
+// because a synthetic page has no real sheet behind it (the real detector runs
+// against a sample board in e2e.mjs).
+const blankSheet = await page.evaluate(async () => {
   const ed = window.app.editor;
   const els = await import('/js/elements.js');
+  const box = (x, y, w, h) => els.makePointsElement(els.T.RECT, {
+    stroke: '#FF1F1F1F', width: 2, closed: true,
+    points: [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }],
+  });
+  const real = ed.pdf.pageIsBlank.bind(ed.pdf);
+  window.__blankCalls = [];
+  ed.pdf.pageIsBlank = async (n) => { window.__blankCalls.push(n); return true; };
+  ed.doc.pages = [{
+    elements: [box(-173, -93, 1200, 900), box(1100, 700, 1400, 1900)],
+    scale: 1,
+    pdfPages: [{ pageNumber: 2, bounds: '285,103,1437,2040' }],
+  }];
+  ed.doc.currentPage = 0;
   ed.camera.zoom = 0.8;
-  ed.gotoPage(5);
-  await new Promise((r) => setTimeout(r, 150));
-  const p = ed.doc.pages[5];
-  const boxes = p.elements.map((e) => els.elementBounds(e));
-  const left = Math.min(...boxes.map((b) => b.left));
-  const leftColumnTop = Math.min(...boxes.filter((b) => b.left <= left + 10).map((b) => b.top));
-  const otherTop = Math.min(...boxes.filter((b) => b.left > left + 10).map((b) => b.top));
-  const anchor = ed.anchorOfPage(5);
-  const screen = ed.worldToScreen(left, anchor.top);
-  return {
-    leftColumnTop, otherTop, anchorTop: anchor.top,
-    anchorOnScreen: { x: Math.round(screen.x), y: Math.round(screen.y) },
-    otherTopOnScreen: Math.round(ed.worldToScreen(left + 950, otherTop).y),
+  ed.gotoPage(0);
+  const p = ed.doc.pages[0];
+  for (let i = 0; i < 60 && p.blankBackdrop !== true; i++) await new Promise((r) => setTimeout(r, 50));
+  const frame = ed.boundsOfPage(0);
+  let content = null;
+  for (const e of p.elements) {
+    const b = els.elementBounds(e);
+    content = content ? content.union(b) : b;
+  }
+  const s = ed.worldToScreen(content.left, content.top);
+  const out = {
+    blankBackdrop: p.blankBackdrop,
+    calls: window.__blankCalls,
+    frameW: Math.round(frame.w),
+    paperW: 1437,
+    contentOnScreen: { x: Math.round(s.x), y: Math.round(s.y) },
+    centred: ed.anchorOfPage(0).centred,
   };
+  ed.pdf.pageIsBlank = real;
+  return out;
 });
-check('以「最左侧内容的最上侧」为准：右边更高的列不会让左上角留白',
-  leftmost.anchorTop === leftmost.leftColumnTop
-  && Math.abs(leftmost.anchorOnScreen.y - 12) <= 2
-  && leftmost.otherTop < leftmost.leftColumnTop
-  && leftmost.otherTopOnScreen < 0,
-  JSON.stringify(leftmost));
+check('PDF 背景全白的页面按内容取景（不是围着一张空纸）',
+  blankSheet.blankBackdrop === true && blankSheet.calls.length > 0
+  && blankSheet.centred === false && blankSheet.frameW > blankSheet.paperW
+  && Math.abs(blankSheet.contentOnScreen.x - 12) <= 2 && Math.abs(blankSheet.contentOnScreen.y - 12) <= 2,
+  JSON.stringify(blankSheet));
 
 await page.screenshot({ path: path.join(SHOTS, 'r3-final.png') });
 await browser.close();

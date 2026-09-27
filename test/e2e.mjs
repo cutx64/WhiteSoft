@@ -570,6 +570,71 @@ await waitPdfBitmap();
 await sleep(1500);
 await page.screenshot({ path: path.join(SHOTS, 'e2e-aljabr2.png') });
 
+/* ---------------------------------------------------------------- *
+ * 10b. Blank PDF sheets are not a backdrop
+ *
+ * 228 / 302 carry a PDF layer whose page is *entirely white* (the visible
+ * content is scans pasted on top of it), and 553-555 carry no PDF at all;
+ * 165 has a real scanned page behind it.  The blank ones must be framed by
+ * their content, the painted one by its sheet.
+ * ---------------------------------------------------------------- */
+console.log('\n[10b] PDF 背景全白的页面');
+const blankPages = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  const els = await import('/js/elements.js');
+  const probe = async (pageNo) => {
+    ed.gotoPage(pageNo - 1);
+    // let the sheet load and be inspected before looking at the framing
+    for (let i = 0; i < 60; i++) {
+      const p = ed.doc.pages[pageNo - 1];
+      const frames = p.pdfPages || [];
+      if (!frames.length || p.blankBackdrop !== undefined) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const p = ed.doc.pages[pageNo - 1];
+    const anchor = ed.anchorOfPage(pageNo - 1);
+    let content = null;
+    for (const e of p.elements) {
+      const b = els.elementBounds(e);
+      content = content ? content.union(b) : b;
+    }
+    const s = content ? ed.worldToScreen(content.left, content.top) : null;
+    return {
+      pageNo,
+      pdf: (p.pdfPages || []).length,
+      blank: p.blankBackdrop,
+      elements: p.elements.length,
+      centred: anchor.centred,
+      contentOnScreen: s ? { x: Math.round(s.x), y: Math.round(s.y) } : null,
+      frameW: Math.round(ed.boundsOfPage(pageNo - 1).w),
+    };
+  };
+  return {
+    blank228: await probe(228),
+    blank302: await probe(302),
+    noPdf553: await probe(553),
+    painted165: await probe(165),
+  };
+});
+check('第 228 页：PDF 背景全白 → 按内容取景（内容左上角贴住窗口左上角）',
+  blankPages.blank228.blank === true && blankPages.blank228.centred === false
+  && Math.abs(blankPages.blank228.contentOnScreen.x - 12) <= 2
+  && Math.abs(blankPages.blank228.contentOnScreen.y - 12) <= 2,
+  JSON.stringify(blankPages.blank228));
+check('第 302 页：PDF 背景全白 → 同样按内容取景',
+  blankPages.blank302.blank === true && blankPages.blank302.centred === false
+  && Math.abs(blankPages.blank302.contentOnScreen.x - 12) <= 2,
+  JSON.stringify(blankPages.blank302));
+check('第 555 页：没有 PDF 图层 → 按内容取景（保持原样）',
+  blankPages.noPdf553.pdf === 0 && blankPages.noPdf553.centred === false
+  && Math.abs(blankPages.noPdf553.contentOnScreen.x - 12) <= 2,
+  JSON.stringify(blankPages.noPdf553));
+check('第 165 页：PDF 背景不是全白 → 仍然按纸面居中显示',
+  blankPages.painted165.blank === false && blankPages.painted165.centred === true
+  && Math.abs(blankPages.painted165.frameW - 1437) <= 2,
+  JSON.stringify(blankPages.painted165));
+await page.screenshot({ path: path.join(SHOTS, 'e2e-aljabr2-blank.png') });
+
 /* ---------------------------------------------------------------- */
 await browser.close();
 await fixtures.close();

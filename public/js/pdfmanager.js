@@ -26,6 +26,8 @@ export class PdfManager {
     this.loading = new Map();
     this.onReady = null;
     this.pageSizes = new Map();
+    /** @type {Map<number, boolean>} pageNumber -> "this page is blank white" */
+    this.blankPages = new Map();
   }
 
   get isOpen() { return !!this.doc; }
@@ -53,6 +55,44 @@ export class PdfManager {
     if (this.doc) { try { await this.doc.destroy(); } catch {} }
     this.doc = null; this.docKey = null; this.pageCount = 0;
     this.cache.clear(); this.loading.clear(); this.pageSizes.clear();
+    this.blankPages.clear();
+  }
+
+  /**
+   * Is this PDF page just a blank white sheet?
+   *
+   * A scanned board can carry a PDF whose page is empty — the real drawings on
+   * it are images pasted over the sheet — and such a page should be treated
+   * like one without any backdrop at all.  The page is rasterised small once
+   * and its pixels sampled; the answer is cached for the document's lifetime.
+   */
+  async pageIsBlank(pageNumber) {
+    if (!this.doc) return true;
+    if (this.blankPages.has(pageNumber)) return this.blankPages.get(pageNumber);
+    let blank = true;
+    try {
+      const bitmap = await this.getPageBitmap(pageNumber, 96);
+      if (bitmap) {
+        const c = document.createElement('canvas');
+        c.width = 32;
+        c.height = 32;
+        const ctx = c.getContext('2d', { alpha: false });
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, c.width, c.height);
+        ctx.drawImage(bitmap, 0, 0, c.width, c.height);
+        const d = ctx.getImageData(0, 0, c.width, c.height).data;
+        let dark = 0;
+        for (let i = 0; i < d.length; i += 4) {
+          if (d[i] < 240 || d[i + 1] < 240 || d[i + 2] < 240) dark++;
+        }
+        // a couple of stray pixels are antialiasing, not content
+        blank = dark <= Math.max(2, (d.length / 4) * 0.01);
+      }
+    } catch (err) {
+      console.warn('pdf blank check failed', pageNumber, err);
+    }
+    this.blankPages.set(pageNumber, blank);
+    return blank;
   }
 
   async getPageSize(pageNumber) {

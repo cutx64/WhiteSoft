@@ -135,19 +135,18 @@ export class Editor {
    * Put the current page in view without touching the zoom, so the zoom the
    * user picked on one page carries over to every other page.
    *
-   * A sheet of paper is centred: an imported PDF page, or a board whose content
-   * stays inside it, is framed left-right like a page on a desk.  But when the
-   * framed area is *wider than the window* — a collage of scans pasted next to
-   * each other, a page without any backdrop — centring would push the beginning
-   * of the page off-screen, so the view is aligned to its **top-left corner**
-   * and the rest runs off to the right/bottom.
+   * A sheet of paper is centred, exactly as it always was.  A page without a
+   * backdrop is a collage whose width is whatever was drawn, so when it is
+   * *wider than the window* centring would push its beginning off-screen: that
+   * one is aligned to its **top-left corner** and the rest runs off to the
+   * right/bottom.
    */
   centerPage({ align = 'top' } = {}) {
     const target = this.boundsOfPage(this.pageIndex);
     if (!target || !target.w) return;
     const z = this.camera.zoom;
     const anchor = this.anchorOfPage(this.pageIndex) || target;
-    const widerThanWindow = anchor.w * z > this.view.w;
+    const widerThanWindow = !anchor.centred && anchor.w * z > this.view.w;
     this.camera.x = align === 'top' && widerThanWindow
       ? anchor.left - 12 / z
       : target.cx - this.view.w / 2 / z;
@@ -249,6 +248,7 @@ export class Editor {
     // this result belongs to a document that is gone and must never be painted
     // onto the new one.
     const owner = this.doc;
+    this.#checkBlankBackdrop();
     this.pdf.bitmapsFor(pages, this.camera.zoom, this.dpr)
       .then((list) => {
         if (this.doc !== owner) return;
@@ -312,16 +312,26 @@ export class Editor {
     return this.boundsOfPage(this.pageIndex);
   }
 
-  /** The page's paper (its PDF backdrop) and its content, in world units. */
+  /**
+   * The page's paper (its PDF backdrop) and its content, in world units.
+   *
+   * A PDF page that renders as a blank white sheet is *not* paper: boards whose
+   * scans were pasted over an empty PDF would otherwise be framed around an
+   * empty rectangle.  `blankBackdrop` is filled in once the page has been
+   * rasterised (see `syncPdf`), and is undefined while that is unknown — an
+   * unknown backdrop counts as paper, i.e. the view a PDF page always had.
+   */
   #pageRects(index) {
     const p = this.doc.pages[index];
     let paper = null;
     let content = null;
-    if (p) {
+    if (p && (p.pdfPages || []).length && p.blankBackdrop !== true) {
       for (const pp of p.pdfPages || []) {
         const b = Rect.parse(pp.bounds);
         if (b.w > 0 && b.h > 0) paper = paper ? paper.union(b) : b;
       }
+    }
+    if (p) {
       for (const e of p.elements) {
         const b = elementBounds(e);
         content = content ? content.union(b) : b;
@@ -331,21 +341,43 @@ export class Editor {
   }
 
   /**
+   * Learn whether the current page's PDF sheet is blank, and re-frame the view
+   * if that changes how the page should be displayed.  Runs once per PDF page.
+   */
+  async #checkBlankBackdrop() {
+    const page = this.page;
+    const frames = page?.pdfPages || [];
+    if (!frames.length || !this.pdf.isOpen) return;
+    const owner = this.doc;
+    const wanted = frames.map((f) => f.pageNumber);
+    if (page.blankBackdrop !== undefined && page._blankProbe === wanted.join(',')) return;
+    page._blankProbe = wanted.join(',');
+    let blank = true;
+    for (const n of wanted) {
+      // eslint-disable-next-line no-await-in-loop
+      if (!(await this.pdf.pageIsBlank(n))) { blank = false; break; }
+    }
+    if (this.doc !== owner || this.page !== page) return;
+    if (page.blankBackdrop === blank) return;
+    page.blankBackdrop = blank;
+    this.centerPage();
+    this.renderer.invalidate();
+    this.requestRender();
+    this.onChange?.();
+  }
+
+  /**
    * World rect worth framing for an arbitrary page.
    *
-   *  - a page with an imported PDF is framed by its paper — that is the sheet
-   *    the annotations were made on;
-   *  - a page **without** a backdrop has no paper at all, so its content is the
-   *    page;
-   *  - and when the content spills *outside* the paper (scans pasted next to
-   *    each other, a note hanging over the edge, ink drawn beyond the sheet),
-   *    the framing follows the content — otherwise the beginning of the page
-   *    would sit off-screen.
+   * A page with an imported PDF is framed by its **paper** — the sheet the
+   * annotations were made on — whether or not anything was drawn on it, and
+   * whether or not something was pasted past its edge: that is the view such a
+   * page has always had.  A page *without* a backdrop has no paper at all, so
+   * its content is the page.
    */
   boundsOfPage(index) {
     const { paper, content } = this.#pageRects(index);
     if (!this.doc.pages[index]) return new Rect(0, 0, 1280, 720);
-    if (paper && content && !paper.containsRect(content)) return paper.union(content);
     if (paper) return paper;
     if (content) return content;
     return new Rect(-this.view.w / 2, -this.view.h / 2, this.view.w, this.view.h);
@@ -354,18 +386,19 @@ export class Editor {
   /**
    * Where a page starts when the view is put on it.
    *
-   * Normally that is the top-left of the sheet of paper.  When the content
-   * spills outside the paper — or there is no paper at all — the page starts at
-   * its **leftmost content**, and at the top of that leftmost column rather
-   * than at the global top of the page: a column further right (or a single
-   * tall picture) may reach higher, and anchoring there would push the page's
-   * real beginning down and leave a blank strip in the top-left corner.
+   * A sheet of paper starts at its own top-left and is centred left-right (see
+   * `centerPage`) — the display a PDF-backed page always had.
+   *
+   * A page without a backdrop has no paper to frame, so it starts at its
+   * **leftmost content**, and at the top of that leftmost column rather than at
+   * the global top of the page: a column further right (or a single tall
+   * picture) may reach higher, and anchoring there would push the page's real
+   * beginning down and leave a blank strip in the top-left corner.
    */
   anchorOfPage(index) {
     const { paper, content } = this.#pageRects(index);
-    const spills = !!content && (!paper || !paper.containsRect(content));
-    if (!content) return paper ? { left: paper.left, top: paper.top, w: paper.w } : null;
-    if (!spills) return { left: paper.left, top: paper.top, w: paper.w };
+    if (paper) return { left: paper.left, top: paper.top, w: paper.w, centred: true };
+    if (!content) return null;
     // Everything that starts at the left edge, give or take a sliver, counts as
     // the leftmost column (scans pasted side by side rarely line up exactly).
     const strip = Math.max(4, Math.min(content.w * 0.04, 160));
@@ -377,7 +410,7 @@ export class Editor {
     }
     // `top` is null only for a page whose elements vanished between the two
     // passes; the content top is then the best answer available.
-    return { left: content.left, top: top == null ? content.top : top, w: content.w };
+    return { left: content.left, top: top == null ? content.top : top, w: content.w, centred: false };
   }
 
   fitPageWidth() {
