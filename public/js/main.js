@@ -75,7 +75,7 @@ class App {
     this.startAutoSave();
     this.ui.syncStatus();
     this.ui.toast(this.autoSaveMinutes
-      ? `自动保存已开启：每 ${autoSaveLabel(this.autoSaveMinutes)}（仅对已保存过的文件生效）`
+      ? `自动保存已开启：每 ${autoSaveLabel(this.autoSaveMinutes)}，仅对已保存过的文件生效`
       : '自动保存已关闭', 'ok', 2200);
   }
 
@@ -442,7 +442,7 @@ class App {
       recentList.append(el('p', { class: 'wb-hint', text: '这个浏览器还没有打开过文件。' }));
     }
     for (const r of remembered) {
-      const where = r.handleId ? '已记住位置，可直接打开' : '需重新选择（浏览器不支持记住本地文件）';
+      const where = r.handleId ? '已记住位置，可直接打开' : '需重新选择 · 浏览器不支持记住本地文件';
       recentList.append(this.#fileRow({
         icon: r.kind === 'pdf' ? '📄' : '📝',
         title: r.name,
@@ -469,7 +469,7 @@ class App {
       recentList,
       el('p', {
         class: 'wb-hint', text: '记录只保存文件的位置，不会复制文件：Chrome / Edge 下用浏览器授权的'
-          + '文件句柄记住（再次打开时就地读取原文件），其它浏览器只能请你重新选择一次。',
+          + '文件句柄记住，再次打开时就地读取原文件；其它浏览器只能请你重新选择一次。',
       }),
     );
     const dlg = this.ui.dialog('最近使用的文件', body, { wide: true });
@@ -483,7 +483,7 @@ class App {
   async openRecent(entry) {
     const handle = await loadHandle(entry.handleId);
     if (!handle) {
-      this.ui.toast(`请重新选择 ${entry.name}（浏览器不会把本地文件路径交给网页）`, 'warn', 3600);
+      this.ui.toast(`请重新选择 ${entry.name}：浏览器不会把本地文件路径交给网页`, 'warn', 3600);
       return this.pickLocalFile({ pdfOnly: entry.kind === 'pdf' });
     }
     try {
@@ -522,7 +522,7 @@ class App {
       const ui = this.ui;
       const ed = this.editor;
       try {
-        ui.progress(`正在读取 ${file.name}（${formatBytes(file.size)}）…`);
+        ui.progress(`正在读取 ${file.name} · ${formatBytes(file.size)}…`);
         const doc = await openLocalNote(file, { onProgress: (m) => ui.progress(m) });
         ed.resources.setLocalArchive(doc.localArchive);
         if (doc.document?.fileName) {
@@ -570,7 +570,7 @@ class App {
     ui.pagesPanel.classList.add('hidden');
     ui.progress('');
     if (recent) rememberFile(recent);
-    ui.toast(`已打开 ${doc.name}（${doc.pages.length} 张画纸${doc.document ? '，含 PDF 背景' : ''}）`, 'ok');
+    ui.toast(`已打开 ${doc.name} · ${doc.pages.length} 张画纸${doc.document ? '，含 PDF 背景' : ''}`, 'ok');
     if (!silent) ui.closeFlyout();
   }
 
@@ -701,7 +701,7 @@ class App {
       }
       this.markSaved();
       ui.progress('');
-      ui.toast(`${auto ? '已自动保存到' : '已保存'} ${out.target}（${formatBytes(out.bytes)}${adopt ? '' : '，就地覆盖原文件'}）`, 'ok', auto ? 1800 : 2800);
+      ui.toast(`${auto ? '已自动保存到' : '已保存'} ${out.target} · ${formatBytes(out.bytes)}${adopt ? '' : '，就地覆盖原文件'}`, 'ok', auto ? 1800 : 2800);
       ui.syncStatus();
       return true;
     } catch (err) {
@@ -750,7 +750,7 @@ class App {
       download(blob, suggested, 'application/x-note');
       this.markSaved();
       ui.progress('');
-      ui.toast(`已下载 ${suggested}（这个浏览器不能直接写回原文件）`, 'ok', 4200);
+      ui.toast(`已下载 ${suggested}：这个浏览器不能直接写回原文件`, 'ok', 4200);
       return true;
     } catch (err) {
       ui.progress('');
@@ -781,7 +781,7 @@ class App {
     const ui = this.ui;
     const file = doc.fileHandle?.name || doc.localFile?.name || `${doc.name || '未命名白板'}.note`;
     if (!(doc.fileHandle && await ensurePermission(doc.fileHandle, 'readwrite'))) {
-      ui.toast('压缩需要能写回这个文件：请先用「另存为」把它保存到本机（Chrome / Edge 可直接覆盖原文件）', 'warn', 4600);
+      ui.toast('压缩需要能写回这个文件：请先用「另存为」把它保存到本机，Chrome / Edge 可直接覆盖原文件', 'warn', 4600);
       return false;
     }
     // Compact what is on disk, so the preview matches the result: unsaved edits
@@ -806,7 +806,7 @@ class App {
       return false;
     }
 
-    const names = plan.removed.slice(0, 5).map((r) => `${r.name.split('/').pop()}（${formatBytes(r.bytes)}）`);
+    const names = plan.removed.slice(0, 5).map((r) => `${r.name.split('/').pop()} · ${formatBytes(r.bytes)}`);
     const dlg = ui.dialog('一键压缩 .note', el('div', {},
       el('p', { class: 'wb-hint', text: '文件：' + file }),
       plan.removed.length
@@ -814,19 +814,19 @@ class App {
         : null,
       stored.count
         ? el('p', {}, el('b', {
-          text: `另有 ${stored.count} 个条目目前是未压缩存放的（${formatBytes(stored.bytes)}），会一并重新压缩`,
+          text: `另有 ${stored.count} 个条目目前是未压缩存放的，共 ${formatBytes(stored.bytes)}，会一并重新压缩`,
         }))
         : null,
       el('p', {
         class: 'wb-hint',
         text: (plan.removed.length
           ? `体积约 ${formatBytes(before)} → 至少 ${formatBytes(Math.max(0, before - bytes))}`
-            + (stored.count ? '（重新压缩后还会更小）' : '')
+            + (stored.count ? '，重新压缩后还会更小' : '')
           : `体积约 ${formatBytes(before)}，重新压缩后会更小`)
           + '。只删除 Resources/Images 与 Resources/Document 里没被用到的条目，内容本身不做任何修改。',
       }),
       names.length ? el('p', { class: 'wb-hint', text: '例如：' + names.join('、') + (plan.removed.length > names.length ? ` 等 ${plan.removed.length} 个` : '') }) : null,
-      el('p', { class: 'wb-hint', text: '没有额外备份：压缩会直接改写这个文件（写入是原子的，失败不会留下半个文件）。' }),
+      el('p', { class: 'wb-hint', text: '没有额外备份：压缩会直接改写这个文件，写入是原子的，失败不会留下半个文件。' }),
       el('p', { class: 'wb-hint', text: '被删除的图片之后无法再从文件里找回，撤销也救不回来。' }),
     ), {
       actions: [
@@ -893,7 +893,7 @@ class App {
       ui.progress('');
       ui.toast(`已压缩 ${file}：${plan.removed.length ? `删除 ${plan.removed.length} 个未引用的资源，` : ''}`
         + `${formatBytes(plan.size)} → ${formatBytes(out.bytes)}`
-        + `（省下 ${formatBytes(Math.max(0, plan.size - out.bytes))}）`, 'ok', 4600);
+        + `，省下 ${formatBytes(Math.max(0, plan.size - out.bytes))}`, 'ok', 4600);
       ui.syncStatus();
     } catch (err) {
       ui.progress('');
@@ -1026,7 +1026,7 @@ class App {
       this.ui.toast(hasInk ? '这些墨迹太短或太乱，拟合不出曲线' : '请先选中要拟合的墨迹', 'warn', 2600);
       return 0;
     }
-    this.ui.toast(`已把 ${n} 条墨迹拟合成高次曲线（Ctrl+Z 可撤销）`, 'ok', 2200);
+    this.ui.toast(`已把 ${n} 条墨迹拟合成高次曲线 · Ctrl+Z 可撤销`, 'ok', 2200);
     return n;
   }
 
@@ -1037,7 +1037,7 @@ class App {
     // Commit any in-progress text editing first so nothing is resurrected.
     if (ed.inline?.isEditing) ed.inline.commit(true);
     ed.deleteSelection();
-    this.ui.toast(`已删除 ${n} 个对象（Ctrl+Z 可撤销）`, 'ok', 1600);
+    this.ui.toast(`已删除 ${n} 个对象 · Ctrl+Z 可撤销`, 'ok', 1600);
     return n;
   }
 
@@ -1070,8 +1070,8 @@ class App {
         el('p', {
           class: 'wb-hint',
           text: this.editor.doc.fileHandle?.name
-            ? `当前文件：${this.editor.doc.fileHandle.name}（Ctrl+S 覆盖它）`
-            : (this.editor.doc.localFile ? `当前文件：${this.editor.doc.localFile.name}（只能另存为）` : '当前白板还没有保存到文件。'),
+            ? `当前文件：${this.editor.doc.fileHandle.name} · Ctrl+S 覆盖它`
+            : (this.editor.doc.localFile ? `当前文件：${this.editor.doc.localFile.name} · 只能另存为` : '当前白板还没有保存到文件。'),
         }),
       ), {
         actions: [
@@ -1096,7 +1096,7 @@ class App {
     ed.page.elements = [];
     ed.selection.clear();
     ed.commitSnapshot(before, '清空画纸');
-    this.ui.toast('已清空当前画纸（可用 Ctrl+Z 撤销）', 'ok');
+    this.ui.toast('已清空当前画纸 · 可用 Ctrl+Z 撤销', 'ok');
   }
 
   async toggleFullscreen() {

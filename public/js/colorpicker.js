@@ -90,7 +90,7 @@ export function colorPicker({
   const hexInput = el('input', { class: 'wb-picker-hex', type: 'text', spellcheck: 'false', maxlength: '7' });
   const alphaOut = el('span', { class: 'wb-picker-alpha-value' });
 
-  const area = el('div', { class: 'wb-picker-area', tabindex: '0', title: '拖动选择饱和度与明度（方向键微调）' },
+  const area = el('div', { class: 'wb-picker-area', tabindex: '0', title: '拖动选择饱和度与明度 · 方向键微调' },
     el('span', { class: 'wb-picker-knob' }));
   const knob = area.firstChild;
 

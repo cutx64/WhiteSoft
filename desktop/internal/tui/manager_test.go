@@ -10,8 +10,8 @@ import (
 )
 
 // The manager's states work without a running App, so the list/filter logic is
-// testable directly.  (The rendered tree itself is exercised by driving the
-// binary in a real PTY — see the project README.)
+// testable directly.  The rendered tree itself is exercised by driving the
+// binary in a real PTY.
 func newTestManager(t *testing.T) *manager {
 	t.Helper()
 	root := t.TempDir()

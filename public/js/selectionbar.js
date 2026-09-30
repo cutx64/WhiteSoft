@@ -95,21 +95,21 @@ export class SelectionBar {
         () => ed.editElement(only, { selectAll: false })) : null,
       editable ? el('div', { class: 'wb-selbar-sep' }) : null,
       b('color', '改变颜色', (btn) => this.openColorPicker(btn)),
-      stickies.length ? b('style', `便签样式（圆角 / 颜色 / 透明度）—— 已选 ${stickies.length} 张`,
+      stickies.length ? b('style', `便签样式 · 圆角 / 颜色 / 透明度 — 已选 ${stickies.length} 张`,
         (btn) => this.ui.openStickyStyleFlyout(btn)) : null,
       el('div', { class: 'wb-selbar-sep' }),
       b('prev', '复制到上一页', () => this.copyTo(-1)),
       b('next', '复制到下一页', () => this.copyTo(1)),
       b('page', '复制到指定页…', () => this.openPagePrompt()),
       el('div', { class: 'wb-selbar-sep' }),
-      b('copy', '复制 (Ctrl+C)', () => { ed.copySelection(false); this.ui.toast('已复制'); }),
-      b('duplicate', '再制 (Ctrl+D)', () => ed.duplicateSelection()),
-      b('trash', '删除 (Delete)', () => this.ui.app.deleteSelection(), 'danger'),
+      b('copy', '复制 · Ctrl+C', () => { ed.copySelection(false); this.ui.toast('已复制'); }),
+      b('duplicate', '再制 · Ctrl+D', () => ed.duplicateSelection()),
+      b('trash', '删除 · Delete', () => this.ui.app.deleteSelection(), 'danger'),
       el('div', { class: 'wb-selbar-sep' }),
       b('front', '置于顶层', () => ed.reorderSelection('front')),
       b('back', '置于底层', () => ed.reorderSelection('back')),
       b('bottom', '移到图层最底层', () => { ed.reorderSelection('back'); this.ui.toast('已移到最底层', 'ok', 1400); }),
-      b('close', '隐藏操作栏（工具栏「操作栏」按钮可恢复）', () => {
+      b('close', '隐藏操作栏 · 工具栏「操作栏」按钮可恢复', () => {
         this.hidden = true;
         this.ui.showSelectionBar(true);
         this.remove();
@@ -163,7 +163,7 @@ export class SelectionBar {
       class: 'wb-input wb-selpage-input', type: 'text', inputmode: 'numeric',
       placeholder: `1 – ${ed.pageCount}`, value: String(ed.pageIndex + 1),
     });
-    const hint = el('div', { class: 'wb-hint', text: `复制到第几页？（共 ${ed.pageCount} 页）` });
+    const hint = el('div', { class: 'wb-hint', text: `复制到第几页？共 ${ed.pageCount} 页` });
     const pop = el('div', { class: 'wb-selpopover' },
       hint,
       el('div', { class: 'wb-row' }, input,
@@ -245,7 +245,7 @@ export class SelectionBar {
       el('div', { class: 'wb-flyout-label', text: label }),
       grid,
       noColor
-        ? el('p', { class: 'wb-hint', text: '所选对象（图片/反应）不支持改颜色。' })
+        ? el('p', { class: 'wb-hint', text: '图片与反应不支持改颜色。' })
         : el('div', { class: 'wb-color-custom' }, colorPicker({
           color: cur || '#FF000000',
           allowAlpha: false,

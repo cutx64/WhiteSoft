@@ -112,35 +112,36 @@ export class UI {
       ),
       el('div', { class: 'wb-titlewrap' }, this.titleInput, this.saveState),
       el('div', { class: 'wb-titleactions' },
-        btn('open', '打开 .note 白板文件 (Ctrl+O)', () => app.showOpenDialog()),
-        btn('save', '保存 .note (Ctrl+S) — 覆盖当前文件', () => app.save()),
-        btn('copy', '另存为新的 .note 文件 (Ctrl+Shift+S)', () => app.saveAs()),
-        btn('export', '导出 (PNG / PDF / Zip)', () => this.openExportDialog()),
-        btn('pdf', '导入 PDF (Ctrl+Shift+I)', () => app.pickPdf()),
-        btn('help', '键盘快捷键 (F1)', () => this.showShortcuts()),
+        btn('open', '打开 .note 白板文件 · Ctrl+O', () => app.showOpenDialog()),
+        btn('save', '保存 .note · Ctrl+S — 覆盖当前文件', () => app.save()),
+        btn('copy', '另存为新的 .note 文件 · Ctrl+Shift+S', () => app.saveAs()),
+        btn('export', '导出 · PNG / PDF / Zip', () => this.openExportDialog()),
+        btn('pdf', '导入 PDF · Ctrl+Shift+I', () => app.pickPdf()),
+        btn('help', '键盘快捷键 · F1', () => this.showShortcuts()),
       ),
     );
 
     /* ---- toolbar ---- */
     this.toolButtons = {};
     const defs = [
-      ['select', 'select', '套索选择 (V / Alt+Q)'],
-      ['marquee', 'marquee', '矩形框选 (M)'],
-      ['pan', 'hand', '移动画布 (G) — 拖动平移；任何工具下也可按住空格拖动'],
-      ['pen', 'pen', '笔 (P / Alt+W)'],
-      ['highlighter', 'highlighter', '荧光笔 (H / Alt+H)'],
-      ['laser', 'laser', '激光笔 (L / Alt+L)'],
-      ['eraser', 'eraser', '橡皮擦 (E / Alt+X)'],
-      ['ruler', 'ruler', '直尺 (R / Alt+R) — 沿尺边画直线'],
-      ['shape', 'shape', '形状 (S)'],
-      ['text', 'text', '文本框 (T)'],
-      ['sticky', 'sticky', '便签 (N)'],
-      ['reaction', 'reaction', '反应 (Alt+E)'],
+      ['select', 'select', '套索选择 · V / Alt+Q'],
+      ['marquee', 'marquee', '矩形框选 · M'],
+      ['pan', 'hand', '移动画布 · G — 拖动平移；任何工具下也可按住空格拖动'],
+      ['pen', 'pen', '笔 · P / Alt+W'],
+      ['highlighter', 'highlighter', '荧光笔 · H / Alt+H'],
+      ['laser', 'laser', '激光笔 · L / Alt+L'],
+      ['eraser', 'eraser', '橡皮擦 · E / Alt+X'],
+      ['ruler', 'ruler', '直尺 · R / Alt+R — 沿尺边画直线'],
+      ['shape', 'shape', '形状 · S'],
+      ['text', 'text', '文本框 · T'],
+      ['sticky', 'sticky', '便签 · N'],
+      ['reaction', 'reaction', '反应 · Alt+E'],
     ];
     const toolEls = defs.map(([id, icon, title], i) => {
       const shortcut = i < 9 ? String(i + 1) : i === 9 ? '0' : null;
-      const label = shortcut ? `${title.split(' — ')[0]} (${shortcut})${title.includes(' — ') ? ' — ' + title.split(' — ')[1] : ''}` : title;
-      const b = btn(icon, label, () => this.selectTool(id), id === 'pen' || id === 'shape' ? 'has-caret' : '');
+      // the number key is drawn on the button itself as a badge, so the tooltip
+      // only carries the tool's name and its letter shortcut
+      const b = btn(icon, title, () => this.selectTool(id), id === 'pen' || id === 'shape' ? 'has-caret' : '');
       b.dataset.tool = id;
       if (shortcut) {
         b.dataset.shortcut = shortcut;
@@ -151,10 +152,10 @@ export class UI {
     });
     this.toolOrder = defs.map(([id]) => id);
 
-    this.undoBtn = btn('undo', '撤销 (Ctrl+Z)', () => app.undo());
-    this.redoBtn = btn('redo', '重做 (Ctrl+Y)', () => app.redo());
-    this.beautifyBtn = btn('wand', '墨迹转形状 (Alt+B)', () => this.app.beautify());
-    this.deleteBtn = btn('trash', '删除所选 (Delete)', () => this.app.deleteSelection());
+    this.undoBtn = btn('undo', '撤销 · Ctrl+Z', () => app.undo());
+    this.redoBtn = btn('redo', '重做 · Ctrl+Y', () => app.redo());
+    this.beautifyBtn = btn('wand', '墨迹转形状 · Alt+B', () => this.app.beautify());
+    this.deleteBtn = btn('trash', '删除所选 · Delete', () => this.app.deleteSelection());
     this.selbarBtn = btn('select', '显示 / 隐藏所选操作栏', () => this.showSelectionBar());
 
     this.moreBtn = btn('more', '更多', (e) => this.openMoreFlyout(e.currentTarget));
@@ -168,10 +169,10 @@ export class UI {
       el('div', { class: 'wb-group' }, this.beautifyBtn, this.deleteBtn, this.selbarBtn, this.moreBtn),
       el('div', { class: 'wb-sep' }),
       el('div', { class: 'wb-group' },
-        btn('table', '插入表格 (B)', () => { this.editor.setTool('table'); this.syncTools(); }),
-        btn('image', '插入图片 (Ctrl+V 粘贴)', () => this.app.pickImage()),
+        btn('table', '插入表格 · B', () => { this.editor.setTool('table'); this.syncTools(); }),
+        btn('image', '插入图片 · Ctrl+V 粘贴', () => this.app.pickImage()),
         btn('background', '画布背景', (e) => this.openBackgroundFlyout(e.currentTarget)),
-        btn('pages', '页面面板 (Ctrl+Shift+P)', () => this.togglePages()),
+        btn('pages', '页面面板 · Ctrl+Shift+P', () => this.togglePages()),
         this.settingsBtn,
       ),
     );
@@ -184,7 +185,7 @@ export class UI {
     /* ---- zoom control ---- */
     this.zoomInput = el('input', {
       class: 'wb-zoominput', type: 'text', inputmode: 'decimal', value: '100%',
-      title: '输入任意缩放比例后回车（例如 137 或 42.5）；留空回车恢复 100%',
+      title: '输入任意缩放比例后回车，例如 137 或 42.5；留空回车恢复 100%',
       onkeydown: (e) => {
         e.stopPropagation();
         if (e.key === 'Enter') { this.applyZoomInput(); e.target.blur(); }
@@ -194,12 +195,12 @@ export class UI {
       onblur: () => this.syncZoom(),
     });
     this.zoomBar = el('div', { class: 'wb-zoom' },
-      btn('zoomOut', '缩小 (Ctrl+−)', () => this.editor.zoomBy(1 / 1.25), 'sm'),
+      btn('zoomOut', '缩小 · Ctrl+−', () => this.editor.zoomBy(1 / 1.25), 'sm'),
       this.zoomInput,
-      btn('zoomIn', '放大 (Ctrl++)', () => this.editor.zoomBy(1.25), 'sm'),
-      btn('fit', '适应页面宽度 (Ctrl+0)', () => this.editor.fitPageWidth(), 'sm'),
-      btn('fitPage', '显示整页 (Ctrl+Shift+0)', () => this.editor.fitPage(), 'sm'),
-      btn('fullscreen', '全屏 (F11)', () => this.app.toggleFullscreen(), 'sm'),
+      btn('zoomIn', '放大 · Ctrl++', () => this.editor.zoomBy(1.25), 'sm'),
+      btn('fit', '适应页面宽度 · Ctrl+0', () => this.editor.fitPageWidth(), 'sm'),
+      btn('fitPage', '显示整页 · Ctrl+Shift+0', () => this.editor.fitPage(), 'sm'),
+      btn('fullscreen', '全屏 · F11', () => this.app.toggleFullscreen(), 'sm'),
     );
 
     /* ---- page navigation (bottom-right corner) ---- */
@@ -216,9 +217,9 @@ export class UI {
     });
     this.pageTotal = el('span', { class: 'wb-pagetotal', text: '/ 1' });
     this.pageNav = el('div', { class: 'wb-pagenav', title: '页面导航' },
-      btn('chevronL', '上一页 (Page Up)', () => this.editor.prevPage(), 'sm'),
+      btn('chevronL', '上一页 · Page Up', () => this.editor.prevPage(), 'sm'),
       el('div', { class: 'wb-pagebox' }, this.pageInput, this.pageTotal),
-      btn('chevronR', '下一页 (Page Down)', () => this.editor.nextPage(), 'sm'),
+      btn('chevronR', '下一页 · Page Down', () => this.editor.nextPage(), 'sm'),
     );
 
     /* ---- pages panel ---- */
@@ -228,7 +229,7 @@ export class UI {
       el('div', { class: 'wb-panelhead' },
         el('span', { text: '页面' }),
         el('div', { class: 'wb-panelactions' },
-          btn('plus', '新建画纸 (Ctrl+Alt+N)', () => this.editor.addPage(), 'sm'),
+          btn('plus', '新建画纸 · Ctrl+Alt+N', () => this.editor.addPage(), 'sm'),
           btn('close', '关闭面板', () => this.togglePages(false), 'sm'),
         ),
       ),
@@ -334,8 +335,8 @@ export class UI {
   syncStatus() {
     this.undoBtn.disabled = !this.editor.history.canUndo;
     this.redoBtn.disabled = !this.editor.history.canRedo;
-    this.undoBtn.title = this.editor.history.canUndo ? `撤销：${this.editor.history.undoLabel} (Ctrl+Z)` : '撤销 (Ctrl+Z)';
-    this.redoBtn.title = this.editor.history.canRedo ? `重做：${this.editor.history.redoLabel} (Ctrl+Y)` : '重做 (Ctrl+Y)';
+    this.undoBtn.title = this.editor.history.canUndo ? `撤销：${this.editor.history.undoLabel} · Ctrl+Z` : '撤销 · Ctrl+Z';
+    this.redoBtn.title = this.editor.history.canRedo ? `重做：${this.editor.history.redoLabel} · Ctrl+Y` : '重做 · Ctrl+Y';
     this.syncPageNav();
     this.syncZoom();
     this.syncPages();
@@ -700,7 +701,7 @@ export class UI {
     let picker = null;
     const toggle = el('button', {
       class: 'wb-toggle wb-color-toggle', type: 'button', text: '🎨 自定义颜色',
-      title: '展开全色系调色盘（色相 / 饱和度 / 明度 / 十六进制）',
+      title: '展开全色系调色盘：色相 / 饱和度 / 明度 / 十六进制',
       onclick: () => {
         if (picker) { picker.remove(); picker = null; toggle.classList.remove('active'); return; }
         toggle.classList.add('active');
@@ -770,7 +771,7 @@ export class UI {
     ed.pens.forEach((p, i) => {
       penRow.append(el('button', {
         class: 'wb-penslot' + (i === ed.activePen ? ' active' : ''), type: 'button',
-        title: `笔 ${i + 1}（Alt+${i + 1}）`,
+        title: `笔 ${i + 1} · Alt+${i + 1}`,
         onclick: (e) => {
           ed.selectPen(i);
           $$('.wb-penslot', penRow).forEach((n) => n.classList.remove('active'));
@@ -787,7 +788,7 @@ export class UI {
       ));
     });
     const content = el('div', { class: 'wb-flyout-body' },
-      el('div', { class: 'wb-flyout-label', text: '笔（3 支可分别自定义）' }), penRow,
+      el('div', { class: 'wb-flyout-label', text: '笔 · 3 支可分别自定义' }), penRow,
       this.slider('粗细', ed.pen.width, 1, 20, 1, (v) => { ed.pen.width = v; }, (v) => String(Math.round(v))),
       this.slider('不透明度', ed.pen.opacity * 100, 0, 100, 5, (v) => { ed.pen.opacity = v / 100; }, (v) => String(Math.round(v))),
       this.colorField({
@@ -805,7 +806,7 @@ export class UI {
           this.syncPenIndicators();
         },
       }),
-      el('div', { class: 'wb-flyout-label', text: `渐变笔（${GRADIENTS.length} 种，含 matplotlib 配色）` }),
+      el('div', { class: 'wb-flyout-label', text: `渐变笔 · ${GRADIENTS.length} 种，含 matplotlib 配色` }),
       el('div', { class: 'wb-gradientgrid' }, GRADIENTS.map((g) => el('button', {
         class: 'wb-gradient' + (ed.pen.inkGradient === g.id ? ' active' : ''),
         type: 'button', title: g.name, dataset: { gradient: g.id },
@@ -851,7 +852,7 @@ export class UI {
           if (ed.highlighter.straight) ed.setTool('highlighter');
         },
       })),
-      el('p', { class: 'wb-hint', text: '关闭时为自由手绘（平头）；开启后拉出直线高亮，两端自动补成半圆。' }),
+      el('p', { class: 'wb-hint', text: '关闭时为自由手绘，平头；开启后拉出直线高亮，两端自动补成半圆。' }),
       this.colorField({
         label: '颜色',
         palette: PALETTE.highlighter,
@@ -970,7 +971,7 @@ export class UI {
     curveGrid.append(fitBtn);
     const content = el('div', { class: 'wb-flyout-body' },
       el('div', { class: 'wb-flyout-label', text: '形状与线条' }), grid,
-      el('div', { class: 'wb-flyout-label', text: '曲线（拖出一个范围，曲线自动铺满）' }), curveGrid,
+      el('div', { class: 'wb-flyout-label', text: '曲线 · 拖出一个范围，曲线自动铺满' }), curveGrid,
       this.colorField({
         label: '边框颜色',
         palette: PALETTE.pen.slice(0, 15),
@@ -1058,7 +1059,7 @@ export class UI {
       ),
       el('div', { class: 'wb-flyout-label', text: '对齐' }), alignRow,
       el('p', { class: 'wb-hint', text: '在画布上单击即可输入文字，支持中文输入法。' }),
-      el('p', { class: 'wb-hint', text: '支持 LaTeX：$x^2$ 行内公式，$$\\int_0^1 x\\,dx$$ 独立公式（MathJax 渲染）。' }),
+      el('p', { class: 'wb-hint', text: '支持 LaTeX：$x^2$ 行内公式，$$\\int_0^1 x\\,dx$$ 独立公式，由 MathJax 渲染。' }),
     );
     this.openFlyout(anchor, content, { title: '文本' });
   }
@@ -1160,7 +1161,7 @@ export class UI {
       el('p', { class: 'wb-hint', text: sample
         ? `修改所选 ${targets().length} 张便签；同样的样式也会用于新建的便签。`
         : '在画布上单击放置便签，直接输入文字。' }),
-      el('p', { class: 'wb-hint', text: '支持 LaTeX：$E=mc^2$，独立公式写成 $$…$$（MathJax 渲染）。' }),
+      el('p', { class: 'wb-hint', text: '支持 LaTeX：$E=mc^2$，独立公式写成 $$…$$，由 MathJax 渲染。' }),
     );
   }
 
@@ -1189,26 +1190,26 @@ export class UI {
     }, el('span', { class: 'wb-moreicon', html: svg(ICONS[icon], 18) }), el('span', { text: label }));
 
     const content = el('div', { class: 'wb-flyout-body wb-more' },
-      row('trash', '删除所选 (Delete)', () => this.app.deleteSelection()),
-      row('scissors', '剪切所选 (Ctrl+X)', () => ed.copySelection(true)),
-      row('copy', '复制所选 (Ctrl+C)', () => { ed.copySelection(false); this.toast('已复制'); }),
+      row('trash', '删除所选 · Delete', () => this.app.deleteSelection()),
+      row('scissors', '剪切所选 · Ctrl+X', () => ed.copySelection(true)),
+      row('copy', '复制所选 · Ctrl+C', () => { ed.copySelection(false); this.toast('已复制'); }),
       row('table', '插入表格', () => { ed.setTool('table'); this.syncTools(); }),
       row('image', '插入图片', () => this.app.pickImage()),
       row('reaction', '反应', () => { ed.setTool('reaction'); this.syncTools(); }),
-      row('wand', '墨迹转形状 (Alt+B)', () => this.app.beautify()),
-      row('curve', '曲线拟合所选墨迹（高次曲线）', () => this.app.fitSelectionCurves()),
+      row('wand', '墨迹转形状 · Alt+B', () => this.app.beautify()),
+      row('curve', '曲线拟合所选墨迹，高次曲线', () => this.app.fitSelectionCurves()),
       row('pages', '页面面板', () => this.togglePages(true)),
-      row('plus', '在当前页之前新建画纸 (Ctrl+Alt+P)', () => { ed.addPageBefore(); this.syncPages(); }),
-      row('plus', '在当前页之后新建画纸 (Ctrl+Alt+N)', () => { ed.addPageAfter(); this.syncPages(); }),
+      row('plus', '在当前页之前新建画纸 · Ctrl+Alt+P', () => { ed.addPageBefore(); this.syncPages(); }),
+      row('plus', '在当前页之后新建画纸 · Ctrl+Alt+N', () => { ed.addPageAfter(); this.syncPages(); }),
       row('copy', '复制当前画纸', () => { ed.duplicatePage(); this.syncPages(); }),
-      row('front', '置于顶层 (Ctrl+Shift+])', () => ed.reorderSelection('front')),
-      row('back', '置于底层 (Ctrl+Shift+[)', () => ed.reorderSelection('back')),
+      row('front', '置于顶层 · Ctrl+Shift+]', () => ed.reorderSelection('front')),
+      row('back', '置于底层 · Ctrl+Shift+[', () => ed.reorderSelection('back')),
       row('lock', '锁定 / 解锁所选', () => this.app.toggleLock()),
-      row('help', '编辑替代文本 (Alt text)', () => this.app.editAltText()),
+      row('help', '编辑替代文本 · Alt text', () => this.app.editAltText()),
       row('trash', '清空当前画纸', () => this.app.clearPage()),
       row('plus', '新建白板', () => this.app.newDocument()),
       row('save', '另存为 .note 文件…', () => this.app.saveAs()),
-      row('compress', '一键压缩 .note（删除未引用的资源）', () => this.app.compactCurrentNote()),
+      row('compress', '一键压缩 .note，删除未引用的资源', () => this.app.compactCurrentNote()),
     );
     this.openFlyout(anchor, content, { title: '更多' });
   }
@@ -1272,12 +1273,12 @@ export class UI {
     for (const [pct, label] of [[50, '50%'], [80, '80%'], [100, '100%'], [125, '125%'], [150, '150%']]) {
       defaultRow.append(el('button', {
         class: 'wb-chip' + (Math.abs(ed.defaultZoom * 100 - pct) < 0.5 ? ' active' : ''), type: 'button', text: label,
-        title: `新建 / 打开白板时的默认比例（当前 ${Math.round(ed.camera.zoom * 100)}%）`,
+        title: `新建 / 打开白板时的默认比例 · 当前 ${Math.round(ed.camera.zoom * 100)}%`,
         onclick: (e) => {
           ed.defaultZoom = pct / 100;
           $$('.wb-chip', defaultRow).forEach((n) => n.classList.remove('active'));
           e.currentTarget.classList.add('active');
-          this.toast(`默认比例已设为 ${pct}%（新建或打开白板时生效）`, 'ok');
+          this.toast(`默认比例已设为 ${pct}%，新建或打开白板时生效`, 'ok');
         },
       }));
     }
@@ -1298,7 +1299,7 @@ export class UI {
       el('div', { class: 'wb-flyout-label', text: '工具栏位置' }), locRow,
       el('div', { class: 'wb-flyout-label', text: '新建 / 打开白板时的默认比例' }), defaultRow,
       el('div', { class: 'wb-flyout-label', text: '自动保存' }), autoRow,
-      el('p', { class: 'wb-hint', text: '只对已经保存过文件的白板生效（新白板先按 Ctrl+S 存一次）；'
+      el('p', { class: 'wb-hint', text: '只对已经保存过文件的白板生效，新白板先按 Ctrl+S 存一次；'
         + '有改动才会写盘，正在输入文字时也不会打断你。设置会记住。' }),
       el('div', { class: 'wb-flyout-label', text: '绘制' }),
       el('div', { class: 'wb-row' },
@@ -1433,9 +1434,9 @@ export class UI {
     const body = el('div', {},
       el('p', { class: 'wb-hint', text: '快速导出当前画纸为图片，或把全部画纸导出为一个 PDF。' }),
       el('div', { class: 'wb-filelist' },
-        mk('PNG 图片', '导出当前画纸为 PNG（2 倍分辨率）', () => app.exportPng()),
+        mk('PNG 图片', '导出当前画纸为 PNG · 2 倍分辨率', () => app.exportPng()),
         mk('PDF 文档', `导出全部 ${ed.pageCount} 张画纸为一个 PDF`, () => app.exportPdf()),
-        mk('Zip (HTML + JSON)', '导出白板数据与资源，便于二次处理', () => app.exportZip()),
+        mk('Zip · HTML + JSON', '导出白板数据与资源，便于二次处理', () => app.exportZip()),
         mk('另存为 .note', '保存成一个新的 .note 文件，不动原文件', () => app.saveAs()),
         mk('一键压缩 .note', '删除文件里没有任何对象引用的图片等资源，缩小文件体积', () => app.compactCurrentNote()),
       ),
@@ -1466,18 +1467,18 @@ export class UI {
       ['Ctrl + D', '再制所选'],
       ['Ctrl + A', '全选当前画纸'],
       ['Delete / Backspace', '删除所选'],
-      ['方向键（Shift 加速）', '微移所选 / 平移画布'],
+      ['方向键 · Shift 加速', '微移所选 / 平移画布'],
       ['Alt + ← / →', '旋转所选对象'],
       ['Ctrl + Shift + ] / [', '置于顶层 / 置于底层'],
-      ['Alt + B', '墨迹转形状（Beautify）'],
-      ['Ctrl + 滚轮 / 滚轮', '缩放 / 平移（Shift 横向）'],
+      ['Alt + B', '墨迹转形状 · Beautify'],
+      ['Ctrl + 滚轮 / 滚轮', '缩放 / 平移 · Shift 横向'],
       ['空格 + 拖动，或中键拖动', '平移画布'],
-      ['1 – 9 / 0', '按工具栏顺序选择工具（1 套索、2 矩形框选、3 移动画布…0 文本）'],
+      ['1 – 9 / 0', '按工具栏顺序选择工具 · 1 套索、2 矩形框选、3 移动画布…0 文本'],
       ['V / M / G', '套索选择 / 矩形框选 / 移动画布'],
       ['P / H / L / E', '笔 / 荧光笔 / 激光笔 / 橡皮擦'],
-      ['R', '尺子开关（沿尺边画直线）'],
+      ['R', '尺子开关 · 沿尺边画直线'],
       ['S / T / N / B / O', '形状 / 文本 / 便签 / 表格 / 反应'],
-      ['Shift + N', '新建白板（大写字母是独立的快捷键）'],
+      ['Shift + N', '新建白板 · 大写字母是独立的快捷键'],
       ['Shift + 绘制', '直线 / 正方形 / 正圆'],
       ['Ctrl + 0 / Ctrl + Shift + 0', '适应宽度 / 显示整页'],
       ['Ctrl + + / Ctrl + −', '放大 / 缩小'],

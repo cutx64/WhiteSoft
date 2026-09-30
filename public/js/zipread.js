@@ -49,7 +49,7 @@ export class ZipReader {
     for (let i = tail.length - 22; i >= 0; i--) {
       if (readU32(tail, i) === EOCD_SIG) { eocd = i; break; }
     }
-    if (eocd < 0) throw new Error('不是有效的 .note（找不到 ZIP 目录）');
+    if (eocd < 0) throw new Error('不是有效的 .note：找不到 ZIP 目录');
 
     let entryCount = readU16(tail, eocd + 10);
     let cenSize = readU32(tail, eocd + 12);
@@ -142,7 +142,7 @@ export class ZipReader {
       const fflate = await loadFflate();
       return fflate.inflateSync(raw);
     }
-    throw new Error(`不支持的压缩方式 ${e.method}（${name}）`);
+    throw new Error(`不支持的压缩方式 ${e.method}：${name}`);
   }
 
   /** Inflate one entry as UTF-8 text. */
