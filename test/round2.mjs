@@ -87,7 +87,9 @@ const opened = await page.evaluate(() => ({
   name: window.app.editor.doc.name,
   pages: window.app.editor.doc.pages.length,
 }));
-check('从对话框打开 Al-jabr-2', opened.pages === 655 && opened.name === 'Al-jabr-2', JSON.stringify(opened));
+// The sample board is a living file (its owner keeps drawing in it), so the
+// check is "it loaded", not a frozen page count.
+check('从对话框打开 Al-jabr-2', opened.pages >= 600 && opened.name === 'Al-jabr-2', JSON.stringify(opened));
 
 /* ---------------------------------------------------------------- *
  * 2. Table editing

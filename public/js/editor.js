@@ -146,8 +146,7 @@ export class Editor {
     if (!target || !target.w) return;
     const z = this.camera.zoom;
     const anchor = this.anchorOfPage(this.pageIndex) || target;
-    const widerThanWindow = !anchor.centred && anchor.w * z > this.view.w;
-    this.camera.x = align === 'top' && widerThanWindow
+    this.camera.x = align === 'top' && !anchor.centred
       ? anchor.left - 12 / z
       : target.cx - this.view.w / 2 / z;
     this.camera.y = align === 'middle'
@@ -341,6 +340,24 @@ export class Editor {
   }
 
   /**
+   * Where the current page begins: the top-left of its sheet, or the world
+   * origin for a page the view is framed around from there instead — a new
+   * page, or one whose PDF sheet turned out to be a blank white page and is
+   * therefore not a backdrop at all (see `#pageRects`).  Pasting into an empty
+   * page puts the picture here, so that it lands where the page itself starts
+   * rather than wherever the sheet happens to sit in the world.
+   */
+  pageStart() {
+    if (!this.page || this.page.blankBackdrop === true) return { x: 0, y: 0 };
+    let r = null;
+    for (const pp of this.page.pdfPages || []) {
+      const b = Rect.parse(pp.bounds);
+      if (b.w > 0 && b.h > 0) r = r ? r.union(b) : b;
+    }
+    return r ? { x: r.left, y: r.top } : { x: 0, y: 0 };
+  }
+
+  /**
    * Learn whether the current page's PDF sheet is blank, and re-frame the view
    * if that changes how the page should be displayed.  Runs once per PDF page.
    */
@@ -398,7 +415,10 @@ export class Editor {
   anchorOfPage(index) {
     const { paper, content } = this.#pageRects(index);
     if (paper) return { left: paper.left, top: paper.top, w: paper.w, centred: true };
-    if (!content) return null;
+    // A page without a backdrop has no sheet to centre: its area starts where
+    // its content starts, or — while it is still empty — at the world origin,
+    // which is where a new page begins and where pasted content is put.
+    if (!content) return { left: 0, top: 0, w: this.view.w / this.camera.zoom, centred: false };
     // Everything that starts at the left edge, give or take a sliver, counts as
     // the leftmost column (scans pasted side by side rarely line up exactly).
     const strip = Math.max(4, Math.min(content.w * 0.04, 160));

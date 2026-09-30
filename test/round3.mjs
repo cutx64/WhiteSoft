@@ -563,7 +563,7 @@ const discarded = await page.evaluate(async () => {
   await new Promise((r) => setTimeout(r, 1500));
   return { name: window.app.editor.doc.name, pages: window.app.editor.doc.pages.length, modified: window.app.modified };
 });
-check('放弃更改后载入新白板', discarded.name === 'Al-jabr-2' && discarded.pages === 655, JSON.stringify(discarded));
+check('放弃更改后载入新白板', discarded.name === 'Al-jabr-2' && discarded.pages >= 600, JSON.stringify(discarded));
 
 // a clean board loads without any prompt
 await stageFixture(fixtures.url('Al-jabr-1.note'));
@@ -707,8 +707,8 @@ check('无 PDF 且内容比窗口宽：视口对到内容的左上角（不再�
   Math.abs(framing.wide.screenX - 12) <= 2 && Math.abs(framing.wide.screenY - 12) <= 2
   && framing.wide.centredX < -100,
   JSON.stringify(framing.wide));
-check('无 PDF 但内容比窗口窄：仍然居中显示（原来的手感不变）',
-  framing.narrow.screenX > 100 && Math.abs(framing.narrow.screenY - 12) <= 2,
+check('无 PDF 的页面一律从左上角开始（内容窄时也一样）',
+  Math.abs(framing.narrow.screenX - 12) <= 2 && Math.abs(framing.narrow.screenY - 12) <= 2,
   JSON.stringify(framing.narrow));
 check('带 PDF 背景的页面仍然居中（纸面框住窗口）',
   Math.abs(framing.framed.screenX - (framing.framed.viewW - framing.framed.frameW * 0.8) / 2) <= 3,
@@ -832,6 +832,141 @@ check('PDF 背景全白的页面按内容取景（不是围着一张空纸）',
   && blankSheet.centred === false && blankSheet.frameW > blankSheet.paperW
   && Math.abs(blankSheet.contentOnScreen.x - 12) <= 2 && Math.abs(blankSheet.contentOnScreen.y - 12) <= 2,
   JSON.stringify(blankSheet));
+
+/* ---------------------------------------------------------------- *
+ * A new page starts at the top-left, and so does a picture pasted on it
+ * ---------------------------------------------------------------- */
+console.log('\n[10] 新建空白页 + 粘贴图片');
+const pasteFlow = await page.evaluate(async () => {
+  const app = window.app;
+  const ed = app.editor;
+  const els = await import('/js/elements.js');
+  const box = (x, y, w, h) => els.makePointsElement(els.T.RECT, {
+    stroke: '#FF1F1F1F', width: 2, closed: true,
+    points: [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }],
+  });
+  // a backdrop-less page with content (like page 302), then a fresh page after it
+  ed.doc.pages = [
+    { elements: [box(-183, -96, 1200, 900), box(1100, 700, 1400, 1900)], scale: 1, pdfPages: [], blankBackdrop: true },
+    { elements: [], scale: 1, pdfPages: [] },
+  ];
+  ed.doc.currentPage = 0;
+  ed.camera.zoom = 0.8;
+  ed.gotoPage(0);
+  await new Promise((r) => setTimeout(r, 200));
+  ed.addPageAfter(0);
+  await new Promise((r) => setTimeout(r, 350));
+  const fresh = {
+    index: ed.pageIndex,
+    elements: ed.page.elements.length,
+    originOnScreen: (() => { const s = ed.worldToScreen(0, 0); return { x: Math.round(s.x), y: Math.round(s.y) }; })(),
+  };
+  const c = document.createElement('canvas');
+  c.width = 640; c.height = 400;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0169BF'; g.fillRect(0, 0, 640, 400);
+  await app.insertImageBlob(await new Promise((r) => c.toBlob(r, 'image/png')));
+  await new Promise((r) => setTimeout(r, 400));
+  const img = ed.page.elements.find((e) => e.type === 300001);
+  const b = els.elementBounds(img);
+  const tl = ed.worldToScreen(b.left, b.top);
+  // leaving the page and coming back must frame the same corner
+  ed.gotoPage(0);
+  await new Promise((r) => setTimeout(r, 200));
+  ed.gotoPage(1);
+  await new Promise((r) => setTimeout(r, 350));
+  const again = ed.worldToScreen(b.left, b.top);
+  return {
+    fresh,
+    image: { x: Math.round(b.x), y: Math.round(b.y) },
+    imageTopLeftOnScreen: { x: Math.round(tl.x), y: Math.round(tl.y) },
+    afterReopen: { x: Math.round(again.x), y: Math.round(again.y) },
+    docPages: ed.doc.pages.length,
+  };
+});
+check('新建的空白页：页面原点就在窗口左上角（不居中）',
+  pasteFlow.fresh.elements === 0
+  && Math.abs(pasteFlow.fresh.originOnScreen.x - 12) <= 3
+  && Math.abs(pasteFlow.fresh.originOnScreen.y - 12) <= 3,
+  JSON.stringify(pasteFlow.fresh));
+check('在这页上粘贴图片：图片落在页面左上角（不是屏幕正中）',
+  pasteFlow.image.x >= 0 && pasteFlow.image.x < 40 && pasteFlow.image.y >= 0 && pasteFlow.image.y < 40
+  && pasteFlow.imageTopLeftOnScreen.x < 60 && pasteFlow.imageTopLeftOnScreen.y < 60,
+  JSON.stringify(pasteFlow));
+check('离开再回到这页，仍然从左上角显示',
+  Math.abs(pasteFlow.afterReopen.x - 12) <= 3 && Math.abs(pasteFlow.afterReopen.y - 12) <= 3,
+  JSON.stringify(pasteFlow.afterReopen));
+
+/* ---------------------------------------------------------------- *
+ * 10b. A page's start is the point the view is framed from
+ *
+ * A picture pasted on an empty page goes to the page's start, so that start
+ * has to be the same point the page is framed from — otherwise the picture
+ * lands somewhere the user is not looking at.  Pages begin in different
+ * places: at their sheet's top-left when the sheet is a backdrop, and at the
+ * world origin when the sheet turned out to be a blank white page (not a
+ * backdrop) or when there is no PDF at all.
+ * ---------------------------------------------------------------- */
+console.log('\n[10b] 页面起点 = 取景锚点');
+const startFlow = await page.evaluate(async () => {
+  const app = window.app;
+  const ed = app.editor;
+  const Z = 0.8;
+  const MARGIN = 12 / Z;
+  // a sheet that sits far from the world origin, so "started at the sheet"
+  // and "started at the origin" cannot be confused
+  const sheet = [{ bounds: '600,400,1600,2272', pageNumber: 1 }];
+  const blob = async () => {
+    const c = document.createElement('canvas');
+    c.width = 400; c.height = 300;
+    const g = c.getContext('2d');
+    g.fillStyle = '#0169BF'; g.fillRect(0, 0, 400, 300);
+    return new Promise((r) => c.toBlob(r, 'image/png'));
+  };
+  const probe = async (page) => {
+    ed.doc.pages = [{ elements: [], scale: 1, ...page }];
+    ed.doc.currentPage = 0;
+    ed.camera.zoom = Z;
+    ed.gotoPage(0);
+    ed.centerPage(); // framing is what is under test here, not gotoPage's early-out
+    await new Promise((r) => setTimeout(r, 200));
+    const start = ed.pageStart();
+    const anchor = ed.anchorOfPage(0);
+    const s = ed.worldToScreen(start.x, start.y);
+    await app.insertImageBlob(await blob());
+    await new Promise((r) => setTimeout(r, 300));
+    const els = await import('/js/elements.js');
+    const img = ed.page.elements.find((e) => e.type === 300001);
+    const b = els.elementBounds(img);
+    return {
+      start,
+      anchor: { left: anchor.left, top: anchor.top, centred: anchor.centred },
+      startOnScreen: { x: Math.round(s.x), y: Math.round(s.y) },
+      image: { x: b.left, y: b.top },
+      margin: MARGIN,
+    };
+  };
+  return {
+    painted: await probe({ pdfPages: sheet, blankBackdrop: false, _blankProbe: '1' }),
+    blank: await probe({ pdfPages: sheet, blankBackdrop: true, _blankProbe: '1' }),
+    none: await probe({ pdfPages: [] }),
+  };
+});
+const near = (a, b) => Math.abs(a - b) < 0.01;
+const samePoint = (p, x, y) => p.start.x === x && p.start.y === y
+  && p.anchor.left === x && p.anchor.top === y
+  && near(p.image.x, x + p.margin) && near(p.image.y, y + p.margin);
+check('有 PDF 背景的空页：起点是纸面左上角，粘贴也落在纸面左上角',
+  startFlow.painted.anchor.centred === true && samePoint(startFlow.painted, 600, 400),
+  JSON.stringify(startFlow.painted));
+check('PDF 背景全白的空页：纸面不算背景，起点是世界原点（不是纸面的角落）',
+  startFlow.blank.anchor.centred === false && samePoint(startFlow.blank, 0, 0)
+  && Math.abs(startFlow.blank.startOnScreen.x - 12) <= 3,
+  JSON.stringify(startFlow.blank));
+check('没有 PDF 的空页：起点是世界原点，粘贴也落在原点',
+  startFlow.none.anchor.centred === false && samePoint(startFlow.none, 0, 0)
+  && Math.abs(startFlow.none.startOnScreen.x - 12) <= 3,
+  JSON.stringify(startFlow.none));
 
 await page.screenshot({ path: path.join(SHOTS, 'r3-final.png') });
 await browser.close();

@@ -328,7 +328,15 @@ class App {
     const ratio = img && img.naturalWidth ? img.naturalHeight / img.naturalWidth : 0.6;
     const w = Math.min(maxW, img?.naturalWidth ? img.naturalWidth / 2 : maxW);
     const h = w * ratio;
-    const center = ed.screenToWorld(ed.view.w / 2, ed.view.h / 2);
+    // On an empty page the picture goes to the page's top-left corner (the same
+    // place the page itself is framed from); on a page that already has content
+    // it lands where the user is looking.
+    const margin = 12 / ed.camera.zoom;
+    const empty = ed.page.elements.length === 0;
+    const start = ed.pageStart();
+    const center = empty
+      ? { x: start.x + margin + w / 2, y: start.y + margin + h / 2 }
+      : ed.screenToWorld(ed.view.w / 2, ed.view.h / 2);
     const e = {
       type: T.IMAGE,
       bounds: new Rect(center.x - w / 2, center.y - h / 2, w, h).toString(),

@@ -316,10 +316,14 @@ async function waitPreview(index, fn, timeout = 2000) {
   return { ok: false, c, ms: Date.now() - started };
 }
 
-const afterDraw = await waitPreview(TARGET, (c) => c.black > before.black + 150, 2000);
+// The stroke has to show up as a real share of the preview, not as a fixed
+// pixel count: a preview is framed by the page's content, so how many pixels a
+// stroke covers depends on how far it lands from the rest of that page.
+const grew = (c) => (c.black - before.black) >= Math.max(40, 0.01 * c.w * c.h);
+const afterDraw = await waitPreview(TARGET, grew, 2000);
 check('画笔落下后 ~1 秒内该页预览刷新（出现黑色笔迹）',
   afterDraw.ok && drawnElements === elementsBefore + 1,
-  `black ${before.black} → ${afterDraw.c.black}（${afterDraw.ms}ms, 元素 ${elementsBefore} → ${drawnElements}）`);
+  `black ${before.black} → ${afterDraw.c.black}（${afterDraw.ms}ms, 画布 ${afterDraw.c.w}×${afterDraw.c.h}, 元素 ${elementsBefore} → ${drawnElements}）`);
 
 await page.evaluate(() => window.app.undo());
 await sleep(150);
