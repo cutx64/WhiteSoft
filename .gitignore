@@ -4,14 +4,17 @@ node_modules/
 .chrome-profile*/
 .npm-cache/
 .cache/
-test/shots/
 .xdg/
+
+# Tests are local only: the browser suites in test/ and the Go *_test.go files
+# are kept on disk but never published, so the repository stays product-only.
+test/
+*_test.go
 
 # Scratch workspaces / generated suite copies used when verifying against an
 # isolated server (never part of the repository)
 .tmp-boards/
 .tmp-*/
-test/.tmp-*.mjs
 
 # Go build output of the desktop app
 desktop/whitesoft
