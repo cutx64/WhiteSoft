@@ -873,7 +873,8 @@ export class UI {
     const ed = this.editor;
     const content = el('div', { class: 'wb-flyout-body' },
       this.slider('橡皮大小', ed.eraserSize, 6, 60, 2, (v) => { ed.eraserSize = v; }),
-      el('p', { class: 'wb-hint', text: '橡皮按整笔擦除：划过笔画即可删除该笔。形状、文本、图片请选中后按 Delete 删除。' }),
+      el('p', { class: 'wb-hint', text: '橡皮按整笔擦除：划过笔画即可删除该笔。图片、便签与文本框不会被擦掉，'
+        + '需要时选中后按 Delete 删除。' }),
     );
     this.openFlyout(anchor, content, { title: '橡皮擦' });
   }

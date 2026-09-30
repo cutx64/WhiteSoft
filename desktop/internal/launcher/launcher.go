@@ -144,7 +144,7 @@ func FindNode(explicit string) (string, string, error) {
 	if bin == "" {
 		found, err := exec.LookPath("node")
 		if err != nil {
-			return "", "", errors.New("找不到 node，请先安装 Node.js 18 或更高版本（或用 --node 指定）")
+			return "", "", errors.New("找不到 node，请先安装 Node.js 18 或更高版本，或用 --node 指定")
 		}
 		bin = found
 	}
@@ -156,7 +156,7 @@ func FindNode(explicit string) (string, string, error) {
 	}
 	version := strings.TrimSpace(string(out))
 	if major := nodeMajor(version); major > 0 && major < MinNodeMajor {
-		return "", version, fmt.Errorf("Node.js 版本过低（%s），需要 %d 或更高", version, MinNodeMajor)
+		return "", version, fmt.Errorf("Node.js 版本过低：%s，需要 %d 或更高", version, MinNodeMajor)
 	}
 	return bin, version, nil
 }
@@ -224,7 +224,7 @@ func Start(ctx context.Context, cfg Config) (*Server, error) {
 			if err != nil {
 				return nil, fmt.Errorf("端口 %d 已被占用，也找不到其它空闲端口：%w", DefaultPort, err)
 			}
-			portNote = fmt.Sprintf("端口 %d 已被占用，改用 %d（用 --port 指定固定端口）", DefaultPort, port)
+			portNote = fmt.Sprintf("端口 %d 已被占用，改用 %d；用 --port 可以指定固定端口", DefaultPort, port)
 		}
 	} else if port < 1 || port > 65535 {
 		return nil, fmt.Errorf("端口非法：%d", port)
@@ -283,7 +283,7 @@ func (s *Server) waitReady(ctx context.Context, timeout time.Duration, nodeVersi
 			if strings.Contains(logs, "EADDRINUSE") || strings.Contains(logs, "已被占用") {
 				return fmt.Errorf("端口 %d 已被占用", s.port)
 			}
-			return fmt.Errorf("server.mjs 启动失败（%s）：\n%s", nodeVersion, logs)
+			return fmt.Errorf("server.mjs 启动失败：%s\n%s", nodeVersion, logs)
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
@@ -299,7 +299,7 @@ func (s *Server) waitReady(ctx context.Context, timeout time.Duration, nodeVersi
 		}
 		time.Sleep(80 * time.Millisecond)
 	}
-	return fmt.Errorf("等待 %s 就绪超时（%s）", health, timeout)
+	return fmt.Errorf("等待 %s 就绪超时：%s", health, timeout)
 }
 
 // Stop terminates the server, giving it a moment to shut down cleanly.

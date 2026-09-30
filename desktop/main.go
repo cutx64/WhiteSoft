@@ -7,11 +7,11 @@
 //
 // Usage:
 //
-//	whitesoft                     # 启动桌面端（文件都在浏览器里打开，不需要目录）
+//	whitesoft                     # 启动桌面端，文件都在浏览器里打开，不需要目录
 //	whitesoft tui --root ~/boards # 终端管理器浏览哪个目录
-//	whitesoft --port 9000         # 指定端口（默认自动挑一个空闲端口）
+//	whitesoft --port 9000         # 指定端口，默认自动挑一个空闲端口
 //	whitesoft --no-open           # 只启动服务，不打开浏览器
-//	whitesoft tui                 # 终端管理器（go-tui）
+//	whitesoft tui                 # 终端管理器，基于 go-tui
 package main
 
 import (
@@ -39,6 +39,7 @@ type options struct {
 	node    string
 	noOpen  bool
 	showVer bool
+	help    bool
 }
 
 func main() {
@@ -59,6 +60,9 @@ func run(args []string) error {
 	opts, err := parseFlags(mode, args)
 	if err != nil {
 		return err
+	}
+	if opts.help {
+		return nil // the usage was already printed by the flag set
 	}
 	if opts.showVer {
 		fmt.Printf("WhiteSoft 桌面端 %s\n", version)
@@ -86,7 +90,7 @@ func run(args []string) error {
 			Root: opts.root, Server: opts.server, Node: opts.node, Port: opts.port, Open: false,
 		})
 	default:
-		return fmt.Errorf("未知子命令 %q（可用：tui）", mode)
+		return fmt.Errorf("未知子命令 %q，可用的是 tui", mode)
 	}
 }
 
@@ -94,7 +98,7 @@ func parseFlags(mode string, args []string) (options, error) {
 	var opts options
 	fs := flag.NewFlagSet("whitesoft "+mode, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	usage := "启动桌面端（内嵌网页界面）"
+	usage := "启动桌面端，内嵌网页界面"
 	if mode == "tui" {
 		usage = "打开终端管理器"
 	}
@@ -108,15 +112,18 @@ func parseFlags(mode string, args []string) (options, error) {
 		fmt.Fprintln(os.Stderr, "选项：")
 		fs.PrintDefaults()
 	}
-	fs.StringVar(&opts.root, "root", "", "终端管理器浏览的目录（仅 tui 子命令使用；桌面端不需要）")
-	fs.IntVar(&opts.port, "port", 0, "监听端口（默认 8787，被占用时自动顺延；指定后严格使用该端口）")
-	fs.StringVar(&opts.host, "host", "127.0.0.1", "监听地址")
-	fs.StringVar(&opts.server, "server", "", "server.mjs 的路径（默认自动查找）")
-	fs.StringVar(&opts.node, "node", "", "node 可执行文件（默认用 PATH 里的 node）")
+	fs.StringVar(&opts.root, "root", "", "终端管理器浏览的目录，仅 tui 子命令使用")
+	fs.IntVar(&opts.port, "port", 0, "监听端口，默认 8787，被占用时自动顺延；指定后严格使用")
+	// the default is resolved by the launcher, so the flag set does not print
+	// a "(default ...)" line of its own
+	fs.StringVar(&opts.host, "host", "", "监听地址，默认 127.0.0.1")
+	fs.StringVar(&opts.server, "server", "", "server.mjs 的路径，默认自动查找")
+	fs.StringVar(&opts.node, "node", "", "node 可执行文件，默认用 PATH 里的 node")
 	fs.BoolVar(&opts.noOpen, "no-open", false, "只启动服务，不打开浏览器")
 	fs.BoolVar(&opts.showVer, "version", false, "显示版本")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			opts.help = true
 			return opts, nil
 		}
 		return opts, err
@@ -149,7 +156,8 @@ func runDesktop(opts options) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Node      : %s (%s)\n", nodeVersion, nodeBin)
+	fmt.Printf("Node      : %s\n", nodeVersion)
+	fmt.Printf("Node 路径 : %s\n", nodeBin)
 	fmt.Printf("服务端    : %s\n", serverJS)
 
 	srv, err := launcher.Start(ctx, launcher.Config{
@@ -173,9 +181,9 @@ func runDesktop(opts options) error {
 	}
 	fmt.Printf("界面地址  : %s\n", srv.URL())
 	if opts.noOpen {
-		fmt.Println("已跳过打开浏览器（--no-open）")
+		fmt.Println("已跳过打开浏览器")
 	} else if err := launcher.OpenBrowser(srv.URL()); err != nil {
-		fmt.Fprintf(os.Stderr, "打不开浏览器（%v），请手动访问上面的地址\n", err)
+		fmt.Fprintf(os.Stderr, "打不开浏览器：%v，请手动访问上面的地址\n", err)
 	} else {
 		fmt.Println("已在浏览器中打开界面")
 	}

@@ -87,7 +87,7 @@ func (m *manager) rescan() {
 	m.detail.Set(nil)
 	m.pageCur.Set(0)
 	if len(boards) == 0 {
-		m.status.Set("该目录下没有 .note 文件（可用网页端导入 PDF 新建）")
+		m.status.Set("该目录下没有 .note 文件，可用网页端导入 PDF 新建")
 	} else {
 		m.status.Set(fmt.Sprintf("发现 %d 个白板", len(boards)))
 	}
@@ -472,7 +472,7 @@ func (m *manager) previewLines(p notes.Page) []string {
 		out = append(out, t)
 	}
 	if len(out) == 0 {
-		out = append(out, "（这一页没有文字内容）")
+		out = append(out, "这一页没有文字内容")
 	}
 	return out
 }
@@ -526,7 +526,7 @@ func (m *manager) serverLabel() string {
 	if m.serverUp.Get() {
 		return "服务 " + m.url.Get()
 	}
-	return "服务未启动（s 启动）"
+	return "服务未启动，按 s 启动"
 }
 
 func (m *manager) pdfLabel(d *notes.Detail) string {
@@ -618,7 +618,7 @@ func (m *manager) Render(app *tui.App) *tui.Element {
 		tui.WithBorderStyle(tui.NewStyle().Foreground(tui.Black)),
 	)
 	__tui_12 := tui.New(
-		tui.WithText(fmt.Sprintf("  白板（%d）", len(boards))),
+		tui.WithText(fmt.Sprintf("  白板 %d 个", len(boards))),
 		tui.WithTextStyle(tui.NewStyle().Bold()),
 	)
 	__tui_11.AddChild(__tui_12)
@@ -633,7 +633,7 @@ func (m *manager) Render(app *tui.App) *tui.Element {
 	m.boardRef.Set(__tui_13)
 	if len(boards) == 0 {
 		__tui_14 := tui.New(
-			tui.WithText("（没有匹配的白板）"),
+			tui.WithText("没有匹配的白板"),
 			tui.WithTextStyle(tui.NewStyle().Dim()),
 		)
 		__tui_13.AddChild(__tui_14)
@@ -749,7 +749,7 @@ func (m *manager) Render(app *tui.App) *tui.Element {
 		m.pageRef.Set(__tui_31)
 		if len(pages) == 0 {
 			__tui_32 := tui.New(
-				tui.WithText("（没有匹配的画纸）"),
+				tui.WithText("没有匹配的画纸"),
 				tui.WithTextStyle(tui.NewStyle().Dim()),
 			)
 			__tui_31.AddChild(__tui_32)

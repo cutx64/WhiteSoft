@@ -197,6 +197,22 @@ export const reactionTool = {
 /* ------------------------------------------------------------------ *
  * Eraser
  * ------------------------------------------------------------------ */
+/**
+ * What the eraser refuses to eat.
+ *
+ * The eraser takes whole objects away, so it is limited to what was *drawn* on
+ * the page: ink, highlighters and shapes.  A picture, a sticky note or a text
+ * box is content the user placed there on purpose, and a stray stroke of the
+ * eraser must not destroy it — those are removed by selecting them and
+ * pressing Delete.  Tables and reactions stay erasable, like the shapes.
+ */
+const ERASER_KEEPS = new Set([T.IMAGE, T.TEXT, T.STICKY]);
+
+/** Would the eraser take this element away? */
+export function isErasable(e) {
+  return !ERASER_KEEPS.has(e.type);
+}
+
 export const eraserTool = {
   name: 'eraser',
   cursor: 'cell',
@@ -220,7 +236,7 @@ export const eraserTool = {
     let hit = false;
     for (let i = ed.page.elements.length - 1; i >= 0; i--) {
       const e = ed.page.elements[i];
-      if (this._removed.has(e)) continue;
+      if (this._removed.has(e) || !isErasable(e)) continue;
       if (hitTest(e, p.x, p.y, radius)) {
         this._removed.add(e);
         ed.page.elements.splice(i, 1);

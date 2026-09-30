@@ -968,6 +968,114 @@ check('没有 PDF 的空页：起点是世界原点，粘贴也落在原点',
   && Math.abs(startFlow.none.startOnScreen.x - 12) <= 3,
   JSON.stringify(startFlow.none));
 
+/* ---------------------------------------------------------------- *
+ * 11. The eraser keeps pictures, sticky notes and text boxes
+ *
+ * The eraser takes whole objects away, so it is limited to what was drawn:
+ * ink, highlighters, shapes and the like.  A picture, a sticky note or a text
+ * box is content placed on purpose — dragging the eraser across it must not
+ * destroy it, and must not put anything in the undo history either.
+ * ---------------------------------------------------------------- */
+console.log('\n[11] 橡皮擦不擦图片 / 便签 / 文本框');
+const eraseTargets = await page.evaluate(async () => {
+  const app = window.app;
+  const ed = app.editor;
+  const els = await import('/js/elements.js');
+  const { Rect } = await import('/js/geometry.js');
+  // one of each kind, in a row, at known world coordinates
+  const ink = els.makeInk({
+    stroke: '#FF1F1F1F', width: 30,
+    points: Array.from({ length: 21 }, (_, i) => ({ x: i * 10, y: 0 })),
+  });
+  const shape = els.makePointsElement(els.T.RECT, {
+    stroke: '#FF1F1F1F', width: 20, closed: true, filled: true,
+    points: [{ x: 0, y: 200 }, { x: 200, y: 200 }, { x: 200, y: 320 }, { x: 0, y: 320 }],
+  });
+  const image = els.makeImage({ bounds: new Rect(0, 440, 200, 140), fileName: 'erase-me.png' });
+  const sticky = els.makeSticky({ bounds: new Rect(0, 640, 200, 140) });
+  const text = els.makeText({ bounds: new Rect(0, 840, 200, 120), text: '文本', fontSize: 24 });
+  ed.doc.pages = [{ elements: [ink, shape, image, sticky, text], scale: 1, pdfPages: [] }];
+  ed.doc.currentPage = 0;
+  ed.camera.zoom = 1;
+  ed.gotoPage(0);
+  ed.centerPage();
+  ed.selection.clear();
+  app.ui.selectTool('eraser');
+  await new Promise((r) => setTimeout(r, 250));
+  const at = (x, y) => { const s = ed.worldToScreen(x, y); return { x: Math.round(s.x), y: Math.round(s.y) }; };
+  const count = () => ed.page.elements.reduce((m, e) => {
+    const k = { 100001: 'ink', 200003: 'shape', 300001: 'image', 400001: 'sticky', 300002: 'text' }[e.type] || 'other';
+    m[k] = (m[k] || 0) + 1;
+    return m;
+  }, {});
+  return {
+    before: count(),
+    // a sweep across each element, in the middle of it
+    paths: {
+      image: [at(-40, 510), at(240, 510)],
+      sticky: [at(-40, 710), at(240, 710)],
+      text: [at(-40, 900), at(240, 900)],
+      ink: [at(-40, 0), at(240, 0)],
+      shape: [at(-40, 260), at(240, 260)],
+    },
+  };
+});
+check('页面上有墨迹 / 形状 / 图片 / 便签 / 文本框',
+  Object.keys(eraseTargets.before).length === 5
+  && Object.values(eraseTargets.before).every((n) => n === 1),
+  JSON.stringify(eraseTargets.before));
+
+/** Drag the eraser along a world path and read the page back. */
+async function eraseAlong(from, to) {
+  await page.mouse.move(...C(from.x, from.y));
+  await page.mouse.down();
+  for (let i = 1; i <= 10; i++) {
+    await page.mouse.move(...C(from.x + ((to.x - from.x) * i) / 10, from.y + ((to.y - from.y) * i) / 10));
+    await sleep(8);
+  }
+  await page.mouse.up();
+  await sleep(160);
+  return page.evaluate(async () => {
+    const ed = window.app.editor;
+    const count = () => ed.page.elements.reduce((m, e) => {
+      const k = { 100001: 'ink', 200003: 'shape', 300001: 'image', 400001: 'sticky', 300002: 'text' }[e.type] || 'other';
+      m[k] = (m[k] || 0) + 1;
+      return m;
+    }, {});
+    return { count: count(), undoLabel: ed.history.canUndo ? ed.history.undoLabel : '' };
+  });
+}
+
+const afterImage = await eraseAlong(eraseTargets.paths.image[0], eraseTargets.paths.image[1]);
+check('橡皮划过图片：图片还在', afterImage.count.image === 1, JSON.stringify(afterImage));
+const afterSticky = await eraseAlong(eraseTargets.paths.sticky[0], eraseTargets.paths.sticky[1]);
+check('橡皮划过便签：便签还在', afterSticky.count.sticky === 1, JSON.stringify(afterSticky));
+const afterText = await eraseAlong(eraseTargets.paths.text[0], eraseTargets.paths.text[1]);
+check('橡皮划过文本框：文本框还在', afterText.count.text === 1, JSON.stringify(afterText));
+check('没擦到东西就不进撤销历史',
+  afterText.undoLabel !== '擦除',
+  `${afterText.undoLabel}`);
+const afterInk = await eraseAlong(eraseTargets.paths.ink[0], eraseTargets.paths.ink[1]);
+check('橡皮划过墨迹：墨迹被擦掉（橡皮照常可用）',
+  afterInk.count.ink === undefined && afterInk.undoLabel === '擦除', JSON.stringify(afterInk));
+const afterShape = await eraseAlong(eraseTargets.paths.shape[0], eraseTargets.paths.shape[1]);
+check('橡皮划过形状：形状被擦掉',
+  afterShape.count.shape === undefined, JSON.stringify(afterShape));
+check('这一路下来图片 / 便签 / 文本框始终都在',
+  afterShape.count.image === 1 && afterShape.count.sticky === 1 && afterShape.count.text === 1,
+  JSON.stringify(afterShape.count));
+
+const eraseUndo = await page.evaluate(async () => {
+  const ed = window.app.editor;
+  window.app.undo();
+  await new Promise((r) => setTimeout(r, 150));
+  const shape = ed.page.elements.filter((e) => e.type === 200003).length;
+  const counts = ed.page.elements.length;
+  return { shape, counts, label: ed.history.canRedo ? ed.history.redoLabel : '' };
+});
+check('撤销只把刚擦掉的形状找回来，图片 / 便签 / 文本框没被牵扯',
+  eraseUndo.shape === 1 && eraseUndo.counts === 4, JSON.stringify(eraseUndo));
+
 await page.screenshot({ path: path.join(SHOTS, 'r3-final.png') });
 await browser.close();
 await fixtures.close();

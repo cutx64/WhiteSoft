@@ -96,7 +96,7 @@ func (m *manager) rescan() {
 	m.detail.Set(nil)
 	m.pageCur.Set(0)
 	if len(boards) == 0 {
-		m.status.Set("该目录下没有 .note 文件（可用网页端导入 PDF 新建）")
+		m.status.Set("该目录下没有 .note 文件，可用网页端导入 PDF 新建")
 	} else {
 		m.status.Set(fmt.Sprintf("发现 %d 个白板", len(boards)))
 	}
@@ -506,7 +506,7 @@ func (m *manager) previewLines(p notes.Page) []string {
 		out = append(out, t)
 	}
 	if len(out) == 0 {
-		out = append(out, "（这一页没有文字内容）")
+		out = append(out, "这一页没有文字内容")
 	}
 	return out
 }
@@ -563,7 +563,7 @@ func (m *manager) serverLabel() string {
 	if m.serverUp.Get() {
 		return "服务 " + m.url.Get()
 	}
-	return "服务未启动（s 启动）"
+	return "服务未启动，按 s 启动"
 }
 
 /* ------------------------------------------------------------------ *
@@ -597,13 +597,13 @@ templ (m *manager) Render() {
 		<hr class="border-single" />
 		<div class="flex grow">
 			<div class="flex-col w-40 border-rounded border-black">
-				<span class="font-bold">{fmt.Sprintf("  白板（%d）", len(boards))}</span>
+				<span class="font-bold">{fmt.Sprintf("  白板 %d 个", len(boards))}</span>
 				<div
 					ref={m.boardRef}
 					class="flex-col grow overflow-y-scroll scrollbar-cyan scrollbar-thumb-bright-cyan"
 					scrollOffset={0, m.boardScroll.Get()}>
 					if len(boards) == 0 {
-						<span class="font-dim">   （没有匹配的白板）</span>
+						<span class="font-dim">   没有匹配的白板</span>
 					}
 					for i, b := range boards {
 						if m.focus.Get() == 0 && i == m.boardCur.Get() {
@@ -646,7 +646,7 @@ templ (m *manager) Render() {
 						class="flex-col grow overflow-y-scroll scrollbar-cyan scrollbar-thumb-bright-cyan"
 						scrollOffset={0, m.pageScroll.Get()}>
 						if len(pages) == 0 {
-							<span class="font-dim">   （没有匹配的画纸）</span>
+							<span class="font-dim">   没有匹配的画纸</span>
 						}
 						for i, p := range pages {
 							if m.focus.Get() == 1 && i == m.pageCur.Get() {
