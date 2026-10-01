@@ -1493,7 +1493,7 @@ export class UI {
       ['Ctrl + S / Ctrl + Shift + S', '保存 .note / 另存为新 .note'],
       ['Ctrl + Shift + I', '导入 PDF'],
       ['双击文本 / 便签 / 表格', '编辑内容'],
-      ['Esc', '取消当前操作 / 取消选择'],
+      ['Esc', '关闭打开的面板 / 取消框选，不会改变工具的颜色等属性'],
       ['F1', '显示本帮助'],
     ];
     const table = el('table', { class: 'wb-shortcuts' });

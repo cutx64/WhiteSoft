@@ -192,10 +192,18 @@ class App {
       case 'Delete': case 'Backspace':
         if (ed.selection.size) { e.preventDefault(); this.deleteSelection(); }
         return;
-      case 'Escape':
-        if (this.editor.inline?.isEditing) this.editor.inline.commit(true);
-        else { ed.clearSelection(); ed.currentTool?.cancel?.(ed); ed.requestRender(); }
+      case 'Escape': {
+        // One thing per press, and none of them touch the tool: closing a panel
+        // or dropping a selection must leave the pen's colour, the highlighter's
+        // straight-line switch and everything else exactly as they were.
+        if (this.editor.inline?.isEditing) { this.editor.inline.commit(true); return; }
+        if (this.ui.selectionBar?.popover) { this.ui.selectionBar.closePopover(); return; }
+        if (this.ui.flyout) { this.ui.closeFlyout(); return; }
+        if (ed.selection.size) { ed.clearSelection(); ed.requestRender(); return; }
+        ed.currentTool?.cancel?.(ed);
+        ed.requestRender();
         return;
+      }
       case 'PageDown': e.preventDefault(); ed.nextPage(); return;
       case 'PageUp': e.preventDefault(); ed.prevPage(); return;
       case 'Enter': case ' ':

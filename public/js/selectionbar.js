@@ -183,6 +183,14 @@ export class SelectionBar {
     requestAnimationFrame(() => { input.focus(); input.select(); });
   }
 
+  /**
+   * "，图片与反应不受影响" when the selection also holds objects a colour
+   * cannot touch, so the count in the toast is never a surprise.
+   */
+  #untouchedNote(changed) {
+    return changed < this.editor.selection.size ? '，图片与反应不受影响' : '';
+  }
+
   /* ---------------------------------------------------------------- */
   /** Which palette makes sense for what is selected right now. */
   paletteForSelection() {
@@ -215,7 +223,7 @@ export class SelectionBar {
         type: 'button', title: c.name, style: { background: argbToHex(c.argb) },
         onclick: () => {
           const n = ed.applySelectionColor(c.argb);
-          this.ui.toast(`已修改 ${n} 个对象的颜色`, 'ok', 1400);
+          this.ui.toast(`已修改 ${n} 个对象的颜色${this.#untouchedNote(n)}`, 'ok', 1400);
           this.closePopover();
         },
       }));
@@ -236,8 +244,8 @@ export class SelectionBar {
         pending = null;
         ed.commitSnapshot(snap, '修改颜色');
       }
-      const n = ed.selection.size;
-      if (n) this.ui.toast(`已修改 ${n} 个对象的颜色`, 'ok', 1400);
+      const n = ed.colorableSelectionSize();
+      if (n) this.ui.toast(`已修改 ${n} 个对象的颜色${this.#untouchedNote(n)}`, 'ok', 1400);
     };
     const sel = [...ed.selection];
     const noColor = sel.length > 0 && sel.every((e) => IS_OBJECT.has(e.type) && e.type !== T.TEXT && e.type !== T.STICKY && e.type !== T.TABLE);

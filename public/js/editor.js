@@ -709,36 +709,15 @@ export class Editor {
     if (!this.selection.size) return 0;
     const before = snapshot ? this.snapshot() : null;
     let n = 0;
-    for (const e of this.selection) {
-      switch (e.type) {
-        case T.INK:
-        case T.HIGHLIGHTER:
-        case T.LINE: case T.RECT: case T.ELLIPSE: case T.ARROW: case T.DOUBLE_ARROW:
-        case T.POLYLINE: case T.TRIANGLE: case T.DIAMOND: case T.PENTAGON:
-        case T.HEXAGON: case T.STAR: case T.PARALLELOGRAM: case T.BLOCK_ARROW:
-          e.stroke = argb;
-          if (e.filled) e.fill = argb;
-          if (e.inkGradient) delete e.inkGradient;
-          n++;
-          break;
-        case T.TEXT:
-          e.textColor = argb;
-          n++;
-          break;
-        case T.STICKY:
-          // The palette picks a hue; the note keeps its own transparency.
-          e.color = hexToArgb(argbToHex(argb), argbAlpha(e.color));
-          n++;
-          break;
-        case T.TABLE:
-          e.stroke = argb;
-          n++;
-          break;
-        default:
-          break;
-      }
-    }
+    for (const e of this.selection) if (tintElement(e, argb)) n++;
     if (n && before) this.commitSnapshot(before, '修改颜色');
+    return n;
+  }
+
+  /** How many selected elements a colour change would actually touch. */
+  colorableSelectionSize() {
+    let n = 0;
+    for (const e of this.selection) if (canTint(e)) n++;
     return n;
   }
 
@@ -1371,6 +1350,60 @@ export class Editor {
   }
 
   refreshCursor() { this.canvas.style.cursor = this.currentTool?.cursor || 'default'; }
+}
+
+/* ------------------------------------------------------------------ *
+ * Recolouring
+ * ------------------------------------------------------------------ */
+/** Elements that have a colour of their own a palette click can change. */
+const TINTABLE = new Set([
+  T.INK, T.HIGHLIGHTER, T.LINE, T.RECT, T.ELLIPSE, T.ARROW, T.DOUBLE_ARROW,
+  T.POLYLINE, T.TRIANGLE, T.DIAMOND, T.PENTAGON, T.HEXAGON, T.STAR,
+  T.PARALLELOGRAM, T.BLOCK_ARROW, T.TEXT, T.STICKY, T.TABLE,
+]);
+
+function canTint(e) { return TINTABLE.has(e.type); }
+
+/**
+ * Give one element the picked colour, in that element's own way.
+ *
+ * A palette click chooses a **hue** and nothing else, so a mixed selection is
+ * recoloured per object rather than stamped with one value: a pen stroke takes
+ * the colour at the transparency it was drawn with, and so stays solid; a
+ * straight or freehand highlighter keeps the transparency of its band; a sticky
+ * note keeps its own alpha; text recolours its glyphs; a filled shape recolours
+ * its outline and its fill.  Pictures and reactions have no colour of their own
+ * and are left completely alone.
+ *
+ * @returns {boolean} whether this element changed
+ */
+export function tintElement(e, argb) {
+  if (!canTint(e)) return false;
+  const hue = argbToHex(argb);
+  switch (e.type) {
+    case T.INK:
+      // reading the alpha off the stroke keeps a translucent pen translucent
+      e.stroke = hexToArgb(hue, argbAlpha(e.stroke));
+      if (e.inkGradient) delete e.inkGradient;
+      return true;
+    case T.HIGHLIGHTER:
+      e.stroke = hexToArgb(hue, argbAlpha(e.stroke));
+      return true;
+    case T.TEXT:
+      e.textColor = hexToArgb(hue, argbAlpha(e.textColor));
+      return true;
+    case T.STICKY:
+      e.color = hexToArgb(hue, argbAlpha(e.color));
+      return true;
+    case T.TABLE:
+      e.stroke = hexToArgb(hue, argbAlpha(e.stroke));
+      return true;
+    default:
+      // shapes and lines: the outline, plus the fill when the shape has one
+      e.stroke = hexToArgb(hue, argbAlpha(e.stroke));
+      if (e.filled && e.fill) e.fill = hexToArgb(hue, argbAlpha(e.fill));
+      return true;
+  }
 }
 
 /* ------------------------------------------------------------------ *
