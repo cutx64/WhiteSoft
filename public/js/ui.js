@@ -882,7 +882,8 @@ export class UI {
   openShapeFlyout(anchor) {
     const ed = this.editor;
     const shapes = [
-      [T.RECT, '正方形', { force: 'square' }],
+      [T.RECT, '长方形', {}],
+      [T.RECT, '正方形', { force: 'square', square: true }],
       [T.ELLIPSE, '圆形/椭圆', {}],
       [T.TRIANGLE, '三角形', {}],
       [T.PENTAGON, '五边形', {}],
@@ -915,8 +916,11 @@ export class UI {
       this.syncTools();
     };
     for (const [kind, label, opts] of shapes) {
+      // `force` counts too: 长方形 and 正方形 are the same element type, and only
+      // the mode tells them apart, so exactly one of the two lights up.
       const active = ed.shapeKind === kind && (ed.shapeCurve || null) === (opts.curve || null)
-        && !!ed.shapeStyle.rounded === !!opts.rounded && !!ed.shapeStyle.dash === !!opts.dash;
+        && !!ed.shapeStyle.rounded === !!opts.rounded && !!ed.shapeStyle.dash === !!opts.dash
+        && (ed.shapeForce || null) === (opts.force || null);
       const b = el('button', {
         class: 'wb-shapebtn' + (active ? ' active' : ''), title: label, type: 'button',
         html: shapeIcon(kind, opts),
@@ -993,7 +997,7 @@ export class UI {
         onPick: (c) => { ed.shapeStyle.fill = c; },
         onLive: (c) => { ed.shapeStyle.fill = c; },
       }) : null,
-      el('p', { class: 'wb-hint', text: '拖动绘制；按住 Shift 可画正方形 / 正圆 / 45° 直线。' }),
+      el('p', { class: 'wb-hint', text: '拖动绘制；选中正方形后拖出的都是正方形，按住 Shift 也能画正方形 / 正圆 / 45° 直线。' }),
     );
     this.openFlyout(anchor, content, { title: '形状' });
   }
@@ -1524,7 +1528,9 @@ function shapeIcon(kind, opts = {}) {
       [T.LINE]: '<path d="M4 20L20 4"/>',
       [T.ARROW]: '<path d="M4 20L20 4"/><path d="M13 4h7v7"/>',
       [T.DOUBLE_ARROW]: '<path d="M4 20L20 4"/><path d="M4 14v6h6"/><path d="M13 4h7v7"/>',
-      [T.RECT]: opts.rounded ? '<rect x="3.5" y="6" width="17" height="12" rx="4"/>' : '<rect x="3.5" y="6" width="17" height="12"/>',
+      [T.RECT]: opts.square
+        ? '<rect x="5" y="5" width="14" height="14"/>'
+        : (opts.rounded ? '<rect x="3.5" y="6" width="17" height="12" rx="4"/>' : '<rect x="3.5" y="6" width="17" height="12"/>'),
       [T.ELLIPSE]: '<ellipse cx="12" cy="12" rx="8.5" ry="6.5"/>',
       [T.TRIANGLE]: '<path d="M12 5l8 14H4z"/>',
       [T.DIAMOND]: '<path d="M12 4l8 8-8 8-8-8z"/>',

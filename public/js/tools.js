@@ -80,7 +80,7 @@ function strokeWidthFor(ed, kind, cfg) {
 }
 
 /** How far off horizontal a straight highlight may be and still be flattened. */
-const FLAT_MAX_ANGLE = (2 * Math.PI) / 180;
+const FLAT_MAX_ANGLE = (1 * Math.PI) / 180;
 const FLAT_MAX_PIXELS = 3;
 
 /**
@@ -88,8 +88,8 @@ const FLAT_MAX_PIXELS = 3;
  *
  * Underlining is what the straight highlighter is for, and a hand-drawn
  * "horizontal" line is never quite horizontal — a few pixels of wobble over a
- * long stroke, or a lot of wobble over a short one.  A segment within two
- * degrees of horizontal, or with its end within three *screen* pixels of that
+ * long stroke, or a lot of wobble over a short one.  A segment within one
+ * degree of horizontal, or with its end within three *screen* pixels of that
  * height, moves its end onto the start's height.  Nothing else is touched: a
  * visibly diagonal highlight keeps the angle it was drawn with, and holding
  * Shift draws exactly what the pointer did.
