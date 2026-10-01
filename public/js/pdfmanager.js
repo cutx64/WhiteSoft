@@ -16,6 +16,49 @@ const MAX_BUCKET = 4;
 const MIN_BUCKET = 0.5;
 const MAX_CACHE_ENTRIES = 24;
 
+/**
+ * A ceiling for one PDF raster, so a request can never be absurd.
+ *
+ * Browsers do not fail loudly on an oversized canvas: they hand back a canvas
+ * of the requested size that simply never received the drawing commands.  That
+ * is how a PDF backdrop used to "disappear" when the page was zoomed in — the
+ * raster came back as a blank white sheet.  The ceiling keeps the first attempt
+ * sane, and `getPageBitmap` then halves the raster until the browser really
+ * paints it, so the answer adapts to the machine instead of trusting a limit.
+ */
+const MAX_RASTER_AREA = 200 * 1024 * 1024;
+const MAX_RASTER_DIM = 16384;
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+/** The largest scale whose whole-page raster stays under the ceiling. */
+function ceilingScale(base) {
+  const byDim = MAX_RASTER_DIM / Math.max(base.width, base.height);
+  const byArea = Math.sqrt(MAX_RASTER_AREA / (base.width * base.height));
+  return Math.min(byDim, byArea);
+}
+
+/** Is this canvas one the browser allocated but never actually drew into? */
+function canvasIsBlank(canvas) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = 32;
+    c.height = 32;
+    const ctx = c.getContext('2d', { alpha: false });
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, 32, 32);
+    ctx.drawImage(canvas, 0, 0, 32, 32);
+    const d = ctx.getImageData(0, 0, 32, 32).data;
+    let dark = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] < 240 || d[i + 1] < 240 || d[i + 2] < 240) dark++;
+    }
+    return dark <= 2;
+  } catch {
+    return false;
+  }
+}
+
 export class PdfManager {
   constructor() {
     this.doc = null;
@@ -105,9 +148,16 @@ export class PdfManager {
     return size;
   }
 
+  /** The same size, for callers that cannot wait for it yet. */
+  pageSizeSync(pageNumber) { return this.pageSizes.get(pageNumber) || null; }
+
   /**
-   * Returns a canvas containing `pageNumber` rendered at approximately
+   * Returns a canvas holding `pageNumber` rasterised at approximately
    * `targetWidth` device pixels.  Results are cached per resolution bucket.
+   *
+   * A canvas the browser silently refused to paint (too large for the machine)
+   * is retried at half the resolution, so the backdrop may be softer than
+   * asked but is never missing.
    */
   async getPageBitmap(pageNumber, targetWidth) {
     if (!this.doc) return null;
@@ -120,15 +170,24 @@ export class PdfManager {
     const job = (async () => {
       const page = await this.doc.getPage(pageNumber);
       const base = page.getViewport({ scale: 1 });
-      const scale = (targetWidth * bucket) / base.width;
-      const vp = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.ceil(vp.width));
-      canvas.height = Math.max(1, Math.ceil(vp.height));
-      const ctx = canvas.getContext('2d', { alpha: false });
-      ctx.fillStyle = '#FFFFFF';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      await page.render({ canvasContext: ctx, viewport: vp, intent: 'display' }).promise;
+      let scale = Math.min((targetWidth * bucket) / base.width, ceilingScale(base));
+      let canvas = null;
+      for (let attempt = 0; attempt < 6; attempt++) {
+        const vp = page.getViewport({ scale });
+        canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.ceil(vp.width));
+        canvas.height = Math.max(1, Math.ceil(vp.height));
+        const ctx = canvas.getContext('2d', { alpha: false });
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // eslint-disable-next-line no-await-in-loop
+        await page.render({ canvasContext: ctx, viewport: vp, intent: 'display' }).promise;
+        // A blank raster for a page that is not blank means the browser dropped
+        // the drawing: that resolution is out of reach here.
+        const knownBlank = this.blankPages.get(pageNumber) === true;
+        if (knownBlank || scale <= 1 || !canvasIsBlank(canvas)) break;
+        scale /= 2;
+      }
       page.cleanup();
       this.cache.set(key, { canvas, w: canvas.width, h: canvas.height, used: performance.now() });
       this.#evict();

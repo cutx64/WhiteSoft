@@ -62,25 +62,72 @@ export const panTool = {
 /* ------------------------------------------------------------------ *
  * Pen
  * ------------------------------------------------------------------ */
+/**
+ * How wide the stroke being drawn is, in page units.
+ *
+ * The pen's width is what the cursor implies: the same number of screen pixels
+ * whatever ratio the canvas is shown at, so it is divided by the page ratio.
+ *
+ * The highlighter's width is a distance *on the page* instead.  The same
+ * number therefore always gives the same band relative to the page, however
+ * far the canvas is zoomed in when it is drawn: two highlights drawn with 24
+ * at different ratios are exactly as wide as each other, and the one drawn
+ * while magnified simply looks that much thicker on screen.
+ */
+function strokeWidthFor(ed, kind, cfg) {
+  if (kind === 'pen') return cfg.width / ed.camera.zoom;
+  return Math.max(cfg.width, 6);
+}
+
+/** How far off horizontal a straight highlight may be and still be flattened. */
+const FLAT_MAX_ANGLE = (2 * Math.PI) / 180;
+const FLAT_MAX_PIXELS = 3;
+
+/**
+ * Snap an almost horizontal straight highlight to exactly horizontal.
+ *
+ * Underlining is what the straight highlighter is for, and a hand-drawn
+ * "horizontal" line is never quite horizontal — a few pixels of wobble over a
+ * long stroke, or a lot of wobble over a short one.  A segment within two
+ * degrees of horizontal, or with its end within three *screen* pixels of that
+ * height, moves its end onto the start's height.  Nothing else is touched: a
+ * visibly diagonal highlight keeps the angle it was drawn with, and holding
+ * Shift draws exactly what the pointer did.
+ */
+function flattenIfHorizontal(dy, dx, zoom) {
+  if (!dx && !dy) return true;
+  return Math.atan2(dy, dx) <= FLAT_MAX_ANGLE || dy * zoom <= FLAT_MAX_PIXELS;
+}
+
 function makePenTool(kind) {
   return {
     name: kind,
     cursor: 'crosshair',
     _pts: null,
+    /**
+     * Should this drag be flattened towards horizontal when it nearly is?
+     * Shift is the escape hatch: it draws the angle the pointer made.
+     */
+    _flattens(ed, ev) {
+      if (kind !== 'highlighter' || !this._lineMode || ed.ruler.active) return false;
+      return !(ev ? ev.shiftKey : this._shiftSeen);
+    },
     down(ed, p, ev) {
       this._pts = [snapPoint(ed, { x: p.x, y: p.y, pr: pressure(ev) })];
       // The ruler, the highlighter's "draw straight lines" switch and Shift all
       // collapse the stroke to a single segment between two endpoints.
       this._lineMode = ed.ruler.active || (kind === 'highlighter' && !!ed.highlighter.straight);
       this._shiftStraight = false;
+      this._shiftSeen = false;
     },
     move(ed, p, ev) {
       if (!this._pts) return;
+      if (ev.shiftKey) this._shiftSeen = true;
       const last = this._pts[this._pts.length - 1];
       const q = snapPoint(ed, { x: p.x, y: p.y, pr: pressure(ev) });
       if (!this._lineMode && Math.hypot(q.x - last.x, q.y - last.y) < MIN_DRAW_DIST / ed.camera.zoom) return;
       if (this._lineMode || ev.shiftKey) {
-        this._pts = [this._pts[0], q];
+        this._pts = [this._pts[0], this._flatten(ed, ev, q)];
         this._shiftStraight = true;
       } else {
         if (this._shiftStraight) { this._pts = [this._pts[0]]; this._shiftStraight = false; }
@@ -88,13 +135,26 @@ function makePenTool(kind) {
       }
       this._update(ed);
     },
+    /** The end point as it will be used, flattened to horizontal when it nearly is. */
+    _flatten(ed, ev, q) {
+      const a = this._pts[0];
+      if (!this._flattens(ed, ev)) return q;
+      if (!flattenIfHorizontal(Math.abs(q.y - a.y), Math.abs(q.x - a.x), ed.camera.zoom)) return q;
+      return { ...q, y: a.y };
+    },
     up(ed) {
       if (!this._pts) return;
-      const pts = this._pts.length === 1
+      let pts = this._pts.length === 1
         ? [this._pts[0], { ...this._pts[0], x: this._pts[0].x + 0.01 }]
         : this._pts;
+      // A fast drag can end without a last move event, so the segment is
+      // flattened here too; it is a no-op when `move` already did it.  A drag
+      // that ever held Shift keeps the angle the user drew.
+      if (pts.length === 2 && !this._shiftSeen && this._flattens(ed)) {
+        pts = [pts[0], this._flatten(ed, null, pts[1])];
+      }
       const cfg = kind === 'pen' ? ed.pen : ed.highlighter;
-      const width = (kind === 'pen' ? cfg.width : Math.max(cfg.width, 6)) / ed.camera.zoom;
+      const width = strokeWidthFor(ed, kind, cfg);
       const stroke = withOpacity(cfg.color, cfg.opacity);
       let e;
       if (kind === 'pen') {
@@ -117,10 +177,13 @@ function makePenTool(kind) {
       this._pts = null;
       this._shiftStraight = false;
     },
-    cancel(ed) { this._pts = null; this._shiftStraight = false; this._lineMode = false; ed.live = null; },
+    cancel(ed) {
+      this._pts = null; this._shiftStraight = false; this._lineMode = false; this._shiftSeen = false;
+      ed.live = null;
+    },
     _update(ed) {
       const cfg = kind === 'pen' ? ed.pen : ed.highlighter;
-      const width = (kind === 'pen' ? cfg.width : Math.max(cfg.width, 6)) / ed.camera.zoom;
+      const width = strokeWidthFor(ed, kind, cfg);
       const stroke = withOpacity(cfg.color, cfg.opacity);
       if (kind === 'pen') {
         ed.live = makeInk({ stroke, width, points: this._pts });

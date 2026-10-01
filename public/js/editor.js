@@ -247,11 +247,14 @@ export class Editor {
     // this result belongs to a document that is gone and must never be painted
     // onto the new one.
     const owner = this.doc;
+    const previous = this._pdfPages;
     this.#checkBlankBackdrop();
     this.pdf.bitmapsFor(pages, this.camera.zoom, this.dpr)
       .then((list) => {
         if (this.doc !== owner) return;
-        this._pdfPages = list;
+        // A failed raster must not blank the page: keep showing the last good
+        // picture of that frame until a new one arrives.
+        this._pdfPages = list.map((f, i) => (f.bitmap ? f : { ...f, bitmap: previous?.[i]?.bitmap || null }));
         this._pdfKey = key;
         this._loadingPdf = false;
         // A sharper PDF bitmap means the cached layer is stale; rebuild when

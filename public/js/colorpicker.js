@@ -12,18 +12,27 @@
  * converted to and from HSV.  Callers only ever hand in and receive that one
  * format.
  */
-import { el } from './util.js';
-import { argbAlpha, argbToHex, hexToArgb } from './util.js';
+import { el, hexToArgb } from './util.js';
 
-/** `#AARRGGBB` / `#RRGGBB` → `{r, g, b, a}`, tolerant about what it is given. */
+/**
+ * `#AARRGGBB` / `#RRGGBB` / `#RGB` → `{r, g, b, a}`, tolerant about what it is
+ * given.
+ *
+ * The alpha has to come out of an eight-digit colour: this used to normalise
+ * through `argbToHex()`, which returns the *RGB* part only, so every colour
+ * parsed as opaque.  Opening a picker then wrote that opaque colour straight
+ * back into the tool, which is why a translucent highlighter turned solid the
+ * moment its palette was unfolded.
+ */
 export function parseColor(value) {
-  const hex = argbToHex(value || '#FF000000').replace('#', '');
+  let hex = String(value == null ? '' : value).trim().replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
   if (hex.length === 8) {
     return {
-      a: parseInt(hex.slice(0, 2), 16),
-      r: parseInt(hex.slice(2, 4), 16),
-      g: parseInt(hex.slice(4, 6), 16),
-      b: parseInt(hex.slice(6, 8), 16),
+      a: parseInt(hex.slice(0, 2), 16) || 0,
+      r: parseInt(hex.slice(2, 4), 16) || 0,
+      g: parseInt(hex.slice(4, 6), 16) || 0,
+      b: parseInt(hex.slice(6, 8), 16) || 0,
     };
   }
   return {
@@ -104,8 +113,12 @@ export function colorPicker({
   });
   const alphaRow = el('div', { class: 'wb-picker-slider' }, alpha, alphaOut);
 
-  /** Push the current state into the DOM and tell the caller. */
-  const render = (commit) => {
+  /**
+   * Push the current state into the DOM and, unless this is the first paint,
+   * tell the caller.  Unfolding a picker must not write anything back: the
+   * caller's colour is what the picker was built from.
+   */
+  const render = (commit, notify = true) => {
     const { r, g, b } = hsvToRgb(hsv.h, hsv.s, hsv.v);
     state = { r, g, b, a: state.a };
     const argb = formatColor(state);
@@ -120,7 +133,7 @@ export function colorPicker({
     alpha.value = String(state.a);
     alphaOut.textContent = `${Math.round((state.a / 255) * 100)}%`;
     if (document.activeElement !== hexInput) hexInput.value = `#${argb.slice(3)}`;
-    (commit ? onCommit : onInput)?.(argb);
+    if (notify) (commit ? onCommit : onInput)?.(argb);
     return argb;
   };
 
@@ -197,6 +210,6 @@ export function colorPicker({
     allowAlpha ? alphaRow : null,
     el('div', { class: 'wb-picker-row' }, preview, hexInput, allowAlpha ? null : alphaOut),
   );
-  render(false);
+  render(false, false);        // first paint only draws; see `render`
   return node;
 }
