@@ -759,9 +759,11 @@ export class UI {
       : (from + step + buttons.length) % buttons.length;
     this.swatchIndex = to;
     const target = buttons[to];
-    // A click also moves the focus ring and, for a selection, closes the
-    // popover — neither belongs to a keyboard step, so the swatch is applied
-    // directly and the button gets the active state by hand.
+    // A click would also move the focus ring and, for a selection, close the
+    // popover — neither belongs to a keyboard step, so the active state is set
+    // by hand and the swatch is activated with `.click()`: the palettes attach
+    // their handler with addEventListener, so there is no `onclick` *property*
+    // to call (reading it gives null and the colour would never be applied).
     buttons.forEach((b) => b.classList.remove('active'));
     target.classList.add('active');
     if (root === this.selectionBar?.popover) {
@@ -770,7 +772,7 @@ export class UI {
       // whole palette in one go.
       this.editor.applyPaletteColor(target.dataset.argb);
     } else {
-      target.onclick?.();
+      target.click?.();
     }
     return true;
   }
