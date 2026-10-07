@@ -156,6 +156,16 @@ class App {
       e.preventDefault();
       return;
     }
+    // Tab / Shift+Tab walk the palette of the colour control that is open right
+    // now — the pen, highlighter or shape fly-out, or the selection's colour
+    // popover.  Checked before the typing guard because the full-spectrum
+    // picker's hex field is an <input> and Tab must still step colours there.
+    if (e.key === 'Tab' && !mod && !e.altKey) {
+      if (this.ui.cyclePaletteColor(e.shiftKey ? -1 : 1)) {
+        e.preventDefault();
+        return;
+      }
+    }
     if (typing && !(mod && ['s', 'o'].includes(e.key.toLowerCase()))) return;
 
     if (mod) {

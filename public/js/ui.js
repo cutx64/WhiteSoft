@@ -718,11 +718,61 @@ export class UI {
       },
     });
     return el('div', { class: 'wb-field' },
-      label ? el('div', { class: 'wb-flyout-label', text: label }) : null,
+      label
+        ? el('div', { class: 'wb-flyout-label' }, label,
+          el('span', { class: 'wb-label-hint', text: 'Tab 切换颜色' }))
+        : null,
       swatchRow,
       el('div', { class: 'wb-row' }, toggle),
       holder,
     );
+  }
+
+  /**
+   * Tab / Shift+Tab inside an open colour palette: jump to the neighbouring
+   * colour of the *current* control — the pen, highlighter or shape palette in
+   * a fly-out, or the colour popover of a selection.
+   *
+   * The 15 (or 12/6, whichever the control shows) palette colours are a closed,
+   * circular ring, so stepping past either end wraps around.  Gradients are not
+   * part of the ring: the gradient pens live in `.wb-gradientgrid`, never in a
+   * `.wb-swatches` grid, so they are simply not candidates.
+   *
+   * The colour is applied through the same path as a mouse click on that
+   * swatch, which means a selection recolour still lands in the undo stack.
+   *
+   * @param {number} step +1 for the next colour, -1 for the previous one
+   * @returns {boolean} true when an open palette consumed the key
+   */
+  cyclePaletteColor(step) {
+    const root = this.selectionBar?.popover || this.flyout;
+    const buttons = root ? $$('.wb-swatch', root) : [];
+    // Remembered per palette: with nothing active (a custom colour from the
+    // full-spectrum picker) Tab has to start *somewhere*, and it should resume
+    // where the previous Tab left off rather than restarting at the top.
+    if (this.swatchList !== buttons) { this.swatchList = buttons; this.swatchIndex = -1; }
+    if (!buttons.length) return false;
+    const active = buttons.findIndex((b) => b.classList.contains('active'));
+    const from = active >= 0 ? active : this.swatchIndex;
+    const to = from < 0
+      ? (step > 0 ? 0 : buttons.length - 1)
+      : (from + step + buttons.length) % buttons.length;
+    this.swatchIndex = to;
+    const target = buttons[to];
+    // A click also moves the focus ring and, for a selection, closes the
+    // popover — neither belongs to a keyboard step, so the swatch is applied
+    // directly and the button gets the active state by hand.
+    buttons.forEach((b) => b.classList.remove('active'));
+    target.classList.add('active');
+    if (root === this.selectionBar?.popover) {
+      // Recolour exactly like a click on that swatch, except that the popover
+      // stays open and no toast is raised, so Tab can be held down to walk the
+      // whole palette in one go.
+      this.editor.applyPaletteColor(target.dataset.argb);
+    } else {
+      target.onclick?.();
+    }
+    return true;
   }
 
   swatches(colors, current, onPick, { alpha = 255, cols = 5 } = {}) {
@@ -733,12 +783,16 @@ export class UI {
     const curHex = current ? argbToHex(current).toUpperCase() : '';
     for (const c of colors) {
       const hex = argbToHex(c.argb);
+      // The colour a click on this swatch would apply, kept on the button so a
+      // keyboard step (Tab) can apply exactly the same value.
+      const picked = alpha === 255 ? c.argb : hexToArgb(hex, alpha);
       const b = el('button', {
         class: 'wb-swatch' + (c.argb && argbToHex(c.argb).toUpperCase() === curHex ? ' active' : ''),
         title: c.name, type: 'button',
         style: { background: hex },
+        dataset: { argb: picked },
         onclick: () => {
-          onPick(alpha === 255 ? c.argb : hexToArgb(hex, alpha));
+          onPick(picked);
           $$('.wb-swatch', grid).forEach((n) => n.classList.remove('active'));
           b.classList.add('active');
         },
@@ -1485,6 +1539,7 @@ export class UI {
       ['S / T / N / B / O', '形状 / 文本 / 便签 / 表格 / 反应'],
       ['Shift + N', '新建白板 · 大写字母是独立的快捷键'],
       ['Shift + 绘制', '直线 / 正方形 / 正圆'],
+      ['Tab / Shift + Tab', '调色盘里的下一个 / 上一个颜色（笔、荧光笔、形状，或框选后的改色面板）'],
       ['Ctrl + 0 / Ctrl + Shift + 0', '适应宽度 / 显示整页'],
       ['Ctrl + + / Ctrl + −', '放大 / 缩小'],
       ['Page Up / Page Down', '上一页 / 下一页'],

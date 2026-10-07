@@ -721,6 +721,21 @@ export class Editor {
     return n;
   }
 
+  /**
+   * Recolour the selection with one palette swatch.
+   *
+   * This is what a click on a palette button does.  It is also what Tab /
+   * Shift+Tab does while the selection's colour popover is open, which is why
+   * the button's element type is irrelevant here: each selected object is
+   * tinted in its own way, and the swatch only contributes a hue.
+   *
+   * @param {string} argb the swatch colour, `#AARRGGBB`
+   * @returns {number} how many selected elements changed
+   */
+  applyPaletteColor(argb) {
+    return this.applySelectionColor(argb);
+  }
+
   /** The selection's bounding box in CSS pixels relative to the canvas. */
   selectionScreenRect() {
     const b = this.selectionBounds();

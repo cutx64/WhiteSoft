@@ -221,6 +221,9 @@ export class SelectionBar {
         // Compare on RGB: a translucent sticky still shows its hue as active.
         class: 'wb-swatch' + (cur && argbToHex(c.argb).toUpperCase() === argbToHex(cur).toUpperCase() ? ' active' : ''),
         type: 'button', title: c.name, style: { background: argbToHex(c.argb) },
+        // Kept on the button so Tab / Shift+Tab can apply the same colour
+        // without going through a click (see ui.cyclePaletteColor).
+        dataset: { argb: c.argb },
         onclick: () => {
           const n = ed.applySelectionColor(c.argb);
           this.ui.toast(`已修改 ${n} 个对象的颜色${this.#untouchedNote(n)}`, 'ok', 1400);
@@ -261,7 +264,7 @@ export class SelectionBar {
           onInput: (argb) => paint(argb),
           onCommit: (argb) => commit(argb),
         })),
-      el('p', { class: 'wb-hint', text: '调色盘可拖动取色，也支持输入十六进制；拖完只记一步撤销。' }),
+      el('p', { class: 'wb-hint', text: '调色盘可拖动取色，也支持输入十六进制；Tab / Shift+Tab 切换相邻颜色，拖完只记一步撤销。' }),
     );
     this.openPopover(pop);
     void anchor;
