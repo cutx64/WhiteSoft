@@ -45,7 +45,7 @@ WhiteSoft 是一个复刻 Microsoft Whiteboard Windows 本地版的本地应用�
 |---|---|
 | **Node.js** | **18 或更高**。服务端只用 Node 内置模块，运行时不需要 `npm install` |
 | **浏览器** | 桌面版 Chrome / Edge / Firefox，需要 Canvas 2D、`Path2D` 与 ES Module |
-| **系统** | Linux / macOS / Windows。启动脚本是 bash，Windows 上直接运行 `node server.mjs` |
+| **系统** | Linux / macOS / Windows。Linux 与 macOS 用 `whitesoft.sh`，Windows 用 `whitesoft.bat`（两者参数一致） |
 
 ### 启动
 
@@ -55,8 +55,19 @@ cd WhiteSoft
 ./whitesoft.sh
 ```
 
-脚本会检查 Node 版本、确认端口可用，然后启动服务并打印界面地址；
+Windows 上改用同一目录里的批处理脚本（双击运行，或在 cmd / PowerShell 里执行）：
+
+```bat
+whitesoft.bat
+```
+
+两个脚本行为一致：检查 Node 版本、确认端口可用，然后启动服务并打印界面地址；
 用浏览器打开 **http://127.0.0.1:8787/** 即可，加 `--open` 会自动打开浏览器。
+
+`whitesoft.bat` 的提示信息是英文的，而且文件里只有 ASCII 字符——这是刻意的：`cmd.exe`
+按控制台代码页解析 `.bat`，一旦脚本里出现中文（无论是注释还是 `echo`），在代码页不匹配的
+机器上就会被拆成乱码命令，脚本直接跑不起来。服务端自己的中文输出不受影响。
+另外它还支持 `--no-color` 关闭彩色输出（控制台不支持 ANSI 时本来就会自动降级）。
 
 服务端只负责把界面发给浏览器，白板的读写全部在浏览器里完成，所以不需要指定任何目录。
 
@@ -69,6 +80,7 @@ cd WhiteSoft
 | `--open` | 启动后自动打开默认浏览器 |
 | `--auto-port` | 端口被占用时自动顺延，最多试 50 个 |
 | `-h, --help` | 显示帮助 |
+| `--no-color` | 关闭彩色输出（仅 `whitesoft.bat`；控制台不支持 ANSI 时本来就自动降级） |
 
 也可以绕过脚本直接启动服务：
 
