@@ -9,9 +9,11 @@
 import { el, $, $$, argbToHex, argbToRgba, clamp } from './util.js';
 import { T, PALETTE, IS_OBJECT } from './elements.js';
 import { colorPicker } from './colorpicker.js';
+import { splitImage, splitFractionAt, clampSplitFraction } from './imagesplit.js';
 
 const ICON = {
   color: '<circle cx="12" cy="12" r="8"/><path d="M12 4v16"/>',
+  split: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M12 3v18"/><path d="M8 11l-2 2 2 2M16 11l2 2-2 2"/>',
   copy: '<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
   prev: '<path d="M15 5l-7 7 7 7"/>',
   next: '<path d="M9 5l7 7-7 7"/>',
@@ -95,6 +97,10 @@ export class SelectionBar {
         () => ed.editElement(only, { selectAll: false })) : null,
       editable ? el('div', { class: 'wb-selbar-sep' }) : null,
       b('color', '改变颜色', (btn) => this.openColorPicker(btn)),
+      // Cut in two: only offered for a single picture, where it means something.
+      (only && only.type === T.IMAGE)
+        ? b('split', '切割图片 · 水平或竖直切成两半', (btn) => this.openSplitImage(btn))
+        : null,
       stickies.length ? b('style', `便签样式 · 圆角 / 颜色 / 透明度 — 已选 ${stickies.length} 张`,
         (btn) => this.ui.openStickyStyleFlyout(btn)) : null,
       el('div', { class: 'wb-selbar-sep' }),
@@ -268,6 +274,153 @@ export class SelectionBar {
     );
     this.openPopover(pop);
     void anchor;
+  }
+
+  /**
+   * "切割图片": pick the cut direction, then place the cut line on the picture.
+   *
+   * Choosing a direction does not cut straight away: the canvas switches to
+   * placing the line, which follows the pointer (clamped to the picture, so a
+   * click that misses still cuts at the nearest edge) and snaps to the middle.
+   * A click cuts there, Esc or a right-click cancels.
+   *
+   * The two halves take the original's place on the page (same layer) and the
+   * pair is left selected, so a second cut can be made straight away.
+   */
+  openSplitImage(anchor) {
+    const ed = this.editor;
+    const img = [...ed.selection].find((e) => e.type === T.IMAGE);
+    if (!img) return;
+    this.closePopover();
+
+    const choose = (axis) => {
+      dlg.close();
+      this.beginSplitPick(img, axis);
+    };
+    const body = el('div', {},
+      el('p', { class: 'wb-hint', text: '把这张图片切成两半。选好方向后，在图片上点一下决定从哪里切开；这条线会吸附到中间，也可以按 Esc 取消。' }),
+      el('div', { class: 'wb-filelist' },
+        el('button', {
+          class: 'wb-filerow', type: 'button',
+          onclick: () => choose('vertical'),
+        },
+          el('span', { class: 'wb-fileicon', text: '⬍' }),
+          el('span', { class: 'wb-filename' },
+            el('b', { text: '竖直切 · 左右两半' }),
+            el('div', { class: 'wb-pagedesc', text: '在图片上选一个点，沿竖直方向切开，得到左、右两张' }))),
+        el('button', {
+          class: 'wb-filerow', type: 'button',
+          onclick: () => choose('horizontal'),
+        },
+          el('span', { class: 'wb-fileicon', text: '⬌' }),
+          el('span', { class: 'wb-filename' },
+            el('b', { text: '水平切 · 上下两半' }),
+            el('div', { class: 'wb-pagedesc', text: '在图片上选一个点，沿水平方向切开，得到上、下两张' }))),
+      ),
+    );
+    let dlg = null;
+    dlg = this.ui.dialog('切割图片', body);
+    void anchor;
+  }
+
+  /** How close to the middle the cut line snaps, as a fraction of the picture. */
+  static SNAP = 0.02;
+
+  /**
+   * Let the user place the cut line: the guide follows the pointer on the
+   * canvas until a click confirms it.
+   */
+  beginSplitPick(img, axis) {
+    const ed = this.editor;
+    const ui = this.ui;
+    this.cancelSplitPick();
+    // Keep the guide clear of the action bar and of any tool that would use the
+    // click for itself.  The bar comes back with the selection afterwards.
+    this.splitPickHidden = this.hidden;
+    this.hidden = true;
+    this.remove();
+    ui.closeFlyout();
+    ui.closeDialog();
+
+    const state = { img, axis, at: 0.5, moved: false };
+    this.splitPick = state;
+    ui.imageSplitPick = state;
+
+    const host = ed.canvas;
+    const onMove = (ev) => {
+      // Client coordinates have to lose the canvas offset first (the editor's
+      // own #localPoint does the same): screenToWorld works in canvas space, so
+      // skipping this puts the guide wherever the canvas happens to sit.
+      const r = ed._canvasRect || ed.refreshCanvasRect();
+      const world = ed.screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
+      state.at = splitFractionAt(img, world, axis);
+      // Snapping to the middle is what makes an even cut easy to hit.
+      if (Math.abs(state.at - 0.5) <= SelectionBar.SNAP) state.at = 0.5;
+      state.moved = true;
+      ed.requestRender();
+    };
+    const onDown = (ev) => {
+      if (ev.button !== undefined && ev.button !== 0) { this.cancelSplitPick(); return; }
+      // Claim the gesture: the editor's tools must not also see this click.
+      ev.preventDefault();
+      ev.stopPropagation();
+      if (ev.stopImmediatePropagation) ev.stopImmediatePropagation();
+      if (!state.moved) onMove(ev);
+      const at = state.at;
+      this.cancelSplitPick();
+      void this.commitSplit(img, axis, at);
+    };
+    const onLeave = () => { /* keep the last position; the guide stays visible */ };
+    const pickListeners = { onMove, onDown, onLeave };
+    this.splitPickListeners = pickListeners;
+
+    host.addEventListener('pointermove', onMove, true);
+    host.addEventListener('pointerdown', onDown, true);
+    host.addEventListener('pointerleave', onLeave, true);
+
+    ui.toast(axis === 'vertical'
+      ? '在图片上点一下，决定竖直切线放在哪里 · Esc 取消'
+      : '在图片上点一下，决定水平切线放在哪里 · Esc 取消', 'info', 3200);
+    ed.requestRender();
+  }
+
+  /** Leave cut-placement mode (called on confirm, cancel and teardown). */
+  cancelSplitPick() {
+    if (!this.splitPick) return;
+    const l = this.splitPickListeners;
+    const host = this.editor.canvas;
+    if (l) {
+      host.removeEventListener('pointermove', l.onMove, true);
+      host.removeEventListener('pointerdown', l.onDown, true);
+      host.removeEventListener('pointerleave', l.onLeave, true);
+    }
+    this.splitPick = null;
+    this.splitPickListeners = null;
+    this.ui.imageSplitPick = null;
+    // Bring the action bar back the way the user had it.
+    this.hidden = this.splitPickHidden || false;
+    this.splitPickHidden = false;
+    this.editor.requestRender();
+  }
+
+  /** True while the cut line is being placed (used by the Esc handler). */
+  get pickingSplit() { return !!this.splitPick; }
+
+  /** Cut the picture at `at` (0..1 along the cut axis). */
+  async commitSplit(img, axis, at) {
+    const ed = this.editor;
+    const res = await splitImage(ed, img, axis, clampSplitFraction(at));
+    if (!res.ok) {
+      this.ui.toast(res.error || '切割失败', 'warn', 2400);
+      // Put the picture back under the pointer's eye and let it be worked on.
+      ed.selection.clear();
+      ed.selection.add(img);
+      ed.onSelectionChange?.();
+      return;
+    }
+    const which = at < 0.5 ? '前' : at > 0.5 ? '后' : '';
+    this.ui.toast(`已切成两张图片${which ? `（${which}一段较小）` : ''}，图层位置不变`, 'ok', 1800);
+    ed.requestRender();
   }
 
   openPopover(content) {

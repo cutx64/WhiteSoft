@@ -207,6 +207,7 @@ class App {
         // or dropping a selection must leave the pen's colour, the highlighter's
         // straight-line switch and everything else exactly as they were.
         if (this.editor.inline?.isEditing) { this.editor.inline.commit(true); return; }
+        if (this.ui.selectionBar?.pickingSplit) { this.ui.selectionBar.cancelSplitPick(); return; }
         if (this.ui.selectionBar?.popover) { this.ui.selectionBar.closePopover(); return; }
         if (this.ui.flyout) { this.ui.closeFlyout(); return; }
         if (ed.selection.size) { ed.clearSelection(); ed.requestRender(); return; }

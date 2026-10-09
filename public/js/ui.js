@@ -12,6 +12,7 @@ import { SceneRenderer, renderOptions } from './render.js';
 import { SelectionBar } from './selectionbar.js';
 import { T, PALETTE, GRADIENTS, REACTIONS } from './elements.js';
 import { colorPicker, parseColor } from './colorpicker.js';
+import { drawSplitPreview } from './imagesplit.js';
 import { AUTO_SAVE_CHOICES, autoSaveLabel } from './prefs.js';
 
 const ICONS = {
@@ -271,7 +272,13 @@ export class UI {
     });
 
     this.selectionBar = new SelectionBar(this);
-    this.editor.overlayExtra = () => this.selectionBar.update();
+    this.editor.overlayExtra = (ctx, env) => {
+      // While the cut line is being placed the action bar stays out of the way,
+      // so it is not rebuilt on every one of those frames.
+      if (!this.imageSplitPick) this.selectionBar.update();
+      // The guide for the pending cut line rides on top of everything else.
+      if (this.imageSplitPick) drawSplitPreview(ctx, this.imageSplitPick);
+    };
     this.editor.onSelectionChange = () => { this.syncSelection(); this.selectionBar.update(); };
 
     this.applyToolbarLocation('bottom');
@@ -1454,6 +1461,21 @@ export class UI {
    * Dialogs
    * ---------------------------------------------------------------- */
   /**
+   * A clickable row for a modal file/dialog list: glyph, title, description.
+   * The action runs after the dialog has closed, so it is free to open another
+   * dialog or popover.
+   */
+  fileRow(dlg, { glyph = '⬇', title, desc, action }) {
+    return el('button', {
+      class: 'wb-filerow', type: 'button',
+      onclick: () => { dlg.close(); action(); },
+    },
+      el('span', { class: 'wb-fileicon', text: glyph }),
+      el('span', { class: 'wb-filename' }, el('b', { text: title }), el('div', { class: 'wb-pagedesc', text: desc })),
+    );
+  }
+
+  /**
    * Show a modal dialog.  Only one is ever on screen: opening a second one
    * (快捷方式连按两次、从「打开」跳到「最近使用」…) replaces the first instead of
    * stacking modals on top of each other.
@@ -1486,24 +1508,21 @@ export class UI {
   openExportDialog() {
     const app = this.app;
     const ed = this.editor;
-    const mk = (title, desc, fn) => el('button', {
-      class: 'wb-filerow', type: 'button', onclick: () => { dlg.close(); fn(); },
-    },
-      el('span', { class: 'wb-fileicon', text: '⬇' }),
-      el('span', { class: 'wb-filename' }, el('b', { text: title }), el('div', { class: 'wb-pagedesc', text: desc })),
-    );
+    const list = el('div', { class: 'wb-filelist' });
     const body = el('div', {},
       el('p', { class: 'wb-hint', text: '快速导出当前画纸为图片，或把全部画纸导出为一个 PDF。' }),
-      el('div', { class: 'wb-filelist' },
-        mk('PNG 图片', '导出当前画纸为 PNG · 2 倍分辨率', () => app.exportPng()),
-        mk('PDF 文档', `导出全部 ${ed.pageCount} 张画纸为一个 PDF`, () => app.exportPdf()),
-        mk('Zip · HTML + JSON', '导出白板数据与资源，便于二次处理', () => app.exportZip()),
-        mk('另存为 .note', '保存成一个新的 .note 文件，不动原文件', () => app.saveAs()),
-        mk('一键压缩 .note', '删除文件里没有任何对象引用的图片等资源，缩小文件体积', () => app.compactCurrentNote()),
-      ),
+      list,
       el('p', { class: 'wb-hint', text: '提示：Ctrl+S 保存会覆盖当前打开的 .note；想保留原件请用「另存为」。保存后的文件可直接用 Microsoft Whiteboard 打开。' }),
     );
+    // The dialog exists before its rows, so every row closes the real one.
     const dlg = this.dialog('导出白板', body, { wide: true });
+    list.append(
+      this.fileRow(dlg, { title: 'PNG 图片', desc: '导出当前画纸为 PNG · 2 倍分辨率', action: () => app.exportPng() }),
+      this.fileRow(dlg, { title: 'PDF 文档', desc: `导出全部 ${ed.pageCount} 张画纸为一个 PDF`, action: () => app.exportPdf() }),
+      this.fileRow(dlg, { title: 'Zip · HTML + JSON', desc: '导出白板数据与资源，便于二次处理', action: () => app.exportZip() }),
+      this.fileRow(dlg, { title: '另存为 .note', desc: '保存成一个新的 .note 文件，不动原文件', action: () => app.saveAs() }),
+      this.fileRow(dlg, { title: '一键压缩 .note', desc: '删除文件里没有任何对象引用的图片等资源，缩小文件体积', action: () => app.compactCurrentNote() }),
+    );
   }
 
   toast(message, kind = 'info', ms = 2600) {
