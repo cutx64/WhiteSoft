@@ -13,7 +13,7 @@ import { SelectionBar } from './selectionbar.js';
 import { T, PALETTE, GRADIENTS, REACTIONS } from './elements.js';
 import { colorPicker, parseColor } from './colorpicker.js';
 import { drawSplitPreview } from './imagesplit.js';
-import { AUTO_SAVE_CHOICES, autoSaveLabel } from './prefs.js';
+import { AUTO_SAVE_CHOICES, AUTO_SAVE_MAX_MINUTES, autoSaveLabel } from './prefs.js';
 
 const ICONS = {
   menu: '<path d="M3 6h18M3 12h18M3 18h18"/>',
@@ -1354,7 +1354,9 @@ export class UI {
     for (const c of AUTO_SAVE_CHOICES) {
       autoRow.append(el('button', {
         class: 'wb-chip' + (this.app.autoSaveMinutes === c.minutes ? ' active' : ''), type: 'button', text: c.label,
-        title: c.minutes ? `每 ${c.label}自动保存当前打开的文件` : '关闭自动保存',
+        title: c.minutes
+          ? `停止操作 ${c.label}后自动保存当前打开的文件`
+          : '关闭自动保存',
         onclick: (e) => {
           this.app.setAutoSave(c.minutes);
           $$('.wb-chip', autoRow).forEach((n) => n.classList.remove('active'));
@@ -1366,9 +1368,10 @@ export class UI {
     const content = el('div', { class: 'wb-flyout-body' },
       el('div', { class: 'wb-flyout-label', text: '工具栏位置' }), locRow,
       el('div', { class: 'wb-flyout-label', text: '新建 / 打开白板时的默认比例' }), defaultRow,
-      el('div', { class: 'wb-flyout-label', text: '自动保存' }), autoRow,
-      el('p', { class: 'wb-hint', text: '只对已经保存过文件的白板生效，新白板先按 Ctrl+S 存一次；'
-        + '有改动才会写盘，正在输入文字时也不会打断你。设置会记住。' }),
+      el('div', { class: 'wb-flyout-label', text: '自动保存 · 停手一会儿就写盘' }), autoRow,
+      el('p', { class: 'wb-hint', text: '计时从最后一次改动算起：连续画的时候不会反复写盘，停手满这段时间才保存；'
+        + `如果一直不停手，最多 ${AUTO_SAVE_MAX_MINUTES} 分钟也会保存一次。`
+        + '只对已经保存过文件的白板生效，新白板先按 Ctrl+S 存一次；正在输入文字时不会打断你。设置会记住。' }),
       el('div', { class: 'wb-flyout-label', text: '绘制' }),
       el('div', { class: 'wb-row' },
         toggle('对象吸附对齐', ed.snapEnabled, (v) => { ed.snapEnabled = v; }),
@@ -1560,7 +1563,7 @@ export class UI {
       ['S / T / N / B / O', '形状 / 文本 / 便签 / 表格 / 反应'],
       ['Shift + N', '新建白板 · 大写字母是独立的快捷键'],
       ['Shift + 绘制', '直线 / 正方形 / 正圆'],
-      ['Tab / Shift + Tab', '调色盘里的下一个 / 上一个颜色（笔、荧光笔、形状，或框选后的改色面板）'],
+      ['Tab / Shift + Tab', '调色盘里的下一个 / 上一个颜色'],
       ['Ctrl + 0 / Ctrl + Shift + 0', '适应宽度 / 显示整页'],
       ['Ctrl + + / Ctrl + −', '放大 / 缩小'],
       ['Page Up / Page Down', '上一页 / 下一页'],

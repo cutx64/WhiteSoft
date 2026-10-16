@@ -39,7 +39,13 @@ class App {
     this.saving = false;
     // Auto-save is a machine-level preference, so it survives a reload.
     this.autoSaveMinutes = Number(getPref('autoSaveMinutes', 0)) || 0;
-    this.autoSaveTimer = null;
+    // Ceiling for a board that is edited without pause: a save every
+    // `autoSaveMaxMinutes`, however long the user keeps working.
+    this.autoSaveMaxMinutes = Number(getPref('autoSaveMaxMinutes', 15)) || 15;
+    this.autoSaveTimer = null;        // idle countdown, restarted by every change
+    this.autoSaveMaxTimer = null;     // ceiling countdown
+    this.autoSaveMaxAt = null;        // when the ceiling fires
+    this.autoSaveDeadline = null;     // when the idle countdown fires
     this.editor.doc.name = '未命名白板';
     this.ui.titleInput.value = this.editor.doc.name;
     this.bindGlobal();
@@ -49,49 +55,128 @@ class App {
     this.editor.centerPage();
     this.editor.requestRender();
     setTimeout(() => this.editor.resize(), 0);
-    this.startAutoSave();
+    this.rearmAutoSave();
   }
 
   /* ---------------------------------------------------------------- *
    * Auto-save
+   *
+   * Idle-triggered, not a fixed cadence: the timer restarts on every change,
+   * so a file is written once the board has been left alone for the configured
+   * stretch of time.  A ceiling is kept as well, so a board that is edited
+   * continuously is still saved every `autoSaveMaxMinutes` instead of waiting
+   * for a pause that may never come.
    * ---------------------------------------------------------------- */
 
-  /**
-   * (Re)arm the auto-save timer.  The interval is in minutes; 0 turns it off.
-   * Fractions are allowed so tests can drive the real timer.
-   */
-  startAutoSave() {
-    if (this.autoSaveTimer) clearInterval(this.autoSaveTimer);
-    this.autoSaveTimer = null;
-    if (!this.autoSaveMinutes) return;
-    const period = Math.max(200, this.autoSaveMinutes * 60 * 1000);
-    this.autoSaveTimer = setInterval(() => { this.autoSaveTick(); }, period);
+  /** Idle period of the current setting, in milliseconds (0 = off). */
+  #idleMs() {
+    return Math.max(200, this.autoSaveMinutes * 60 * 1000);
   }
 
-  /** Change the interval and remember it for the next session. */
+  /** Ceiling of the current setting, in milliseconds. */
+  #maxMs() {
+    return Math.max(200, this.autoSaveMaxMinutes * 60 * 1000);
+  }
+
+  /**
+   * (Re)arm both timers against the current setting.
+   *
+   * The idle deadline is preserved when only the *setting* changed, so picking
+   * a new value from 设置 does not restart the countdown from that moment.
+   */
+  rearmAutoSave() {
+    if (this.autoSaveTimer) { clearTimeout(this.autoSaveTimer); this.autoSaveTimer = null; }
+    if (this.autoSaveMaxTimer) { clearTimeout(this.autoSaveMaxTimer); this.autoSaveMaxTimer = null; }
+    if (!this.autoSaveMinutes) return;
+
+    const idleLeft = this.autoSaveDeadline ? Math.max(0, this.autoSaveDeadline - Date.now()) : this.#idleMs();
+    this.autoSaveDeadline = Date.now() + idleLeft;
+    this.autoSaveTimer = setTimeout(() => { this.autoSaveIdle(); }, idleLeft);
+
+    // The ceiling counts from the first change of the current dirty stretch, so
+    // it only exists while there is something waiting to be written.
+    if (this.modified) {
+      const maxAt = this.autoSaveMaxAt || (Date.now() + this.#maxMs());
+      this.autoSaveMaxAt = maxAt;
+      const left = Math.max(0, maxAt - Date.now());
+      this.autoSaveMaxTimer = setTimeout(() => { this.autoSaveIdle({ ceiling: true }); }, left);
+    }
+  }
+
+  /** Change the idle interval and remember it; 0 turns auto-save off. */
   setAutoSave(minutes) {
     this.autoSaveMinutes = Number(minutes) || 0;
     setPref('autoSaveMinutes', this.autoSaveMinutes);
-    this.startAutoSave();
-    this.ui.syncStatus();
+    this.autoSaveDeadline = null;
+    this.autoSaveMaxAt = null;
+    this.rearmAutoSave();
+    this.syncAutoSaveState();
     this.ui.toast(this.autoSaveMinutes
-      ? `自动保存已开启：每 ${autoSaveLabel(this.autoSaveMinutes)}，仅对已保存过的文件生效`
-      : '自动保存已关闭', 'ok', 2200);
+      ? `自动保存已开启：停止操作 ${autoSaveLabel(this.autoSaveMinutes)}后自动写盘，仅对已保存过的文件生效`
+      : '自动保存已关闭', 'ok', 2600);
   }
 
   /**
-   * One auto-save tick: writes the open file when it has unsaved changes.
+   * A change was made: restart the idle countdown.
    *
-   * Skipped (until the next tick) when there is nothing to do, so the timer can
-   * never annoy the user: no file on disk yet, no changes, or a save already in
-   * flight.  Text being edited inline is saved as-is — the model already holds
-   * every keystroke, so the editor stays open.
+   * The countdown deliberately does *not* run while a save is in flight — an
+   * edit landing mid-write arms the next idle window instead, which is exactly
+   * what re-arms the timer in `save()`.
    */
-  async autoSaveTick() {
+  noteActivity() {
+    if (!this.autoSaveMinutes) return;
+    this.autoSaveDeadline = Date.now() + this.#idleMs();
+    if (this.autoSaveTimer) clearTimeout(this.autoSaveTimer);
+    this.autoSaveTimer = setTimeout(() => { this.autoSaveIdle(); }, this.#idleMs());
+    if (!this.autoSaveMaxAt) this.autoSaveMaxAt = Date.now() + this.#maxMs();
+    if (!this.autoSaveMaxTimer) {
+      const left = Math.max(0, this.autoSaveMaxAt - Date.now());
+      this.autoSaveMaxTimer = setTimeout(() => { this.autoSaveIdle({ ceiling: true }); }, left);
+    }
+  }
+
+  /** The idle period (or the ceiling) elapsed. */
+  autoSaveIdle({ ceiling = false } = {}) {
+    const written = this.autoSaveNow();
+    // `save()` re-arms both timers by itself, and it is the only path that
+    // leaves the board clean.  Anything else — auto-save off, a save already
+    // running, or no file to write into — must leave a countdown behind, or the
+    // change would sit unwritten until the user happens to edit again.
+    if (!written) {
+      this.autoSaveDeadline = Date.now() + this.#idleMs();
+      this.autoSaveTimer = setTimeout(() => { this.autoSaveIdle(); }, this.#idleMs());
+      if (ceiling) {
+        this.autoSaveMaxAt = Date.now() + this.#maxMs();
+        this.autoSaveMaxTimer = setTimeout(() => { this.autoSaveIdle({ ceiling: true }); }, this.#maxMs());
+      }
+    }
+    this.syncAutoSaveState();
+    return written;
+  }
+
+  /**
+   * Write the open file when there is something to write.
+   *
+   * Skipped when auto-save is off, a save is already running, the board has no
+   * unsaved changes, or the board has no file on disk yet — the timer can then
+   * never annoy the user.  Text being edited inline is saved as-is: the model
+   * already holds every keystroke, so the editor stays open.
+   */
+  async autoSaveNow() {
     if (!this.autoSaveMinutes || this.saving) return false;
     if (!this.modified) return false;
     if (!this.#writableHandle()) return false;
     return this.save({ auto: true, keepEditing: true });
+  }
+
+  /** Refresh the "自动保存…" hint in the status bar. */
+  syncAutoSaveState() {
+    const when = this.autoSaveDeadline && this.modified
+      ? new Date(this.autoSaveDeadline).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      : '';
+    this.ui.setSaveState(this.modified
+      ? (when ? `未保存的更改 · 自动保存约 ${when}` : '未保存的更改')
+      : '');
   }
 
   /**
@@ -109,19 +194,31 @@ class App {
   markModified() {
     if (this.modified) return;
     this.modified = true;
-    this.ui.setSaveState('未保存的更改');
+    // A fresh dirty stretch: start the idle countdown (and the ceiling) now.
+    // Later edits in the same stretch are handled by noteActivity().
+    this.noteActivity();
+    this.syncAutoSaveState();
   }
 
   markSaved() {
     this.modified = false;
-    this.ui.setSaveState('');
+    this.autoSaveDeadline = null;
+    this.autoSaveMaxAt = null;
+    this.syncAutoSaveState();
   }
 
   /* ---------------------------------------------------------------- *
    * Global wiring
    * ---------------------------------------------------------------- */
   bindGlobal() {
-    this.editor.onContentChange = () => this.markModified();
+    this.editor.onContentChange = () => {
+      const wasClean = !this.modified;
+      this.markModified();
+      // Only a change made while the board was already dirty can move the
+      // countdown: an `onContentChange` that changed nothing (a gesture that
+      // ended where it started) must not keep pushing the save away.
+      if (!wasClean) this.noteActivity();
+    };
     window.addEventListener('resize', () => this.editor.resize());
     window.addEventListener('beforeunload', (e) => {
       if (!this.modified) return;
@@ -662,11 +759,11 @@ class App {
    * it in place.  A board that only exists as a read-only snapshot (dragged in,
    * or a browser without the File System Access API) has nowhere to go, so the
    * user is asked for a location instead — never silently, and never on the
-   * autosave timer.
+   * idle auto-save timer.
    *
    * @param {{auto?: boolean, keepEditing?: boolean}} opts
    *   `auto` tags the toast as an automatic save; `keepEditing` leaves the
-   *   inline text editor open (the auto-save timer must not pull it away).
+   *   inline text editor open (auto-save must not pull it away).
    */
   async save({ auto = false, keepEditing = false } = {}) {
     const doc = this.editor.doc;
@@ -729,6 +826,14 @@ class App {
       return false;
     } finally {
       this.saving = false;
+      // Edits can land while the file is being written, and those were recorded
+      // without re-arming anything (a write was in flight).  Settle the next
+      // countdown here: a full idle window if the board is dirty again, and
+      // nothing at all when the file on disk is up to date.
+      this.autoSaveDeadline = null;
+      this.autoSaveMaxAt = null;
+      if (this.modified) this.rearmAutoSave();
+      this.syncAutoSaveState();
     }
   }
 
@@ -777,6 +882,10 @@ class App {
       return false;
     } finally {
       this.saving = false;
+      this.autoSaveDeadline = null;
+      this.autoSaveMaxAt = null;
+      if (this.modified) this.rearmAutoSave();
+      this.syncAutoSaveState();
     }
   }
 
