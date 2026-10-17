@@ -169,14 +169,9 @@ class App {
     return this.save({ auto: true, keepEditing: true });
   }
 
-  /** Refresh the "自动保存…" hint in the status bar. */
+  /** Repaint the "unsaved changes" marker; the countdown itself shows in the status strip. */
   syncAutoSaveState() {
-    const when = this.autoSaveDeadline && this.modified
-      ? new Date(this.autoSaveDeadline).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-      : '';
-    this.ui.setSaveState(this.modified
-      ? (when ? `未保存的更改 · 自动保存约 ${when}` : '未保存的更改')
-      : '');
+    this.ui.setSaveState(this.modified ? '未保存的更改' : '');
   }
 
   /**

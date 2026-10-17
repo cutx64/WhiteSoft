@@ -16,5 +16,9 @@ test/
 .tmp-boards/
 .tmp-*/
 
-# Go build output of the desktop app
+# Go desktop build products.  The web client is mirrored into the embed package
+# by `go generate ./...` (or desktop/build.ps1), so that copy is generated too.
 desktop/whitesoft
+desktop/whitesoft.exe
+desktop/internal/webapp/web/
+legacy-tui/whitesoft-tui

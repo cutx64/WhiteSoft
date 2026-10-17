@@ -394,9 +394,18 @@ export class UI {
     this.pageTotal.textContent = `/ ${ed.pageCount}`;
     const p = ed.page;
     const pdfPage = p.pdfPages && p.pdfPages.length ? ` · PDF 第 ${p.pdfPages[0].pageNumber} 页` : '';
-    const auto = this.app?.autoSaveMinutes ? ` · 自动保存 ${autoSaveLabel(this.app.autoSaveMinutes)}` : '';
+    // The idle countdown restarts on every edit, so it is announced here: this
+    // line is repainted on each change, so the time shown is always current.
+    let idle = '';
+    if (this.app?.autoSaveMinutes && this.app.modified && this.app.autoSaveDeadline) {
+      const when = new Date(this.app.autoSaveDeadline)
+        .toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+      idle = ` · 自动保存 ${when}`;
+    } else if (this.app?.autoSaveMinutes) {
+      idle = ` · 自动保存（空闲 ${autoSaveLabel(this.app.autoSaveMinutes)}）`;
+    }
     this.statusRight.textContent =
-      `画纸 ${ed.pageIndex + 1}/${ed.pageCount}${pdfPage} · ${p.elements.length} 个元素 · ${Math.round(ed.camera.zoom * 100)}%${auto}`;
+      `画纸 ${ed.pageIndex + 1}/${ed.pageCount}${pdfPage} · ${p.elements.length} 个元素 · ${Math.round(ed.camera.zoom * 100)}%${idle}`;
   }
 
   jumpToInput() {

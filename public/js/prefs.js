@@ -32,7 +32,9 @@ export const AUTO_SAVE_MAX_MINUTES = 15;
 export function autoSaveLabel(minutes) {
   if (!minutes) return '关闭';
   if (minutes >= 60 && minutes % 60 === 0) return `${minutes / 60} 小时`;
-  if (minutes < 1) return `${Math.round(minutes * 60)} 秒`;
+  // Anything below a minute reads in seconds; never "0 秒", which would look
+  // like auto-save is off.
+  if (minutes < 1) return `${Math.max(1, Math.round(minutes * 60))} 秒`;
   return `${minutes} 分钟`;
 }
 

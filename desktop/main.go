@@ -1,17 +1,20 @@
-// Command whitesoft is the desktop front end for WhiteSoft.
+// Command whitesoft is the WhiteSoft desktop app.
 //
-// It does not reimplement the whiteboard: the browser UI and the `.note` API
-// stay in `public/` and `server.mjs`, and this binary starts that server,
-// opens a window on it.  A terminal manager
-// (`whitesoft tui`) browses the same library from the command line.
+// It is the whole whiteboard in one binary: the web client that the repository
+// hosts in `public/` is embedded, served from an in-process loopback HTTP
+// server, and shown in a native WebView2 window.  There is no Node.js and no
+// `server.mjs` — the Go program replaces both.
+//
+// Boards stay where they were: opened and written in place by the client
+// through the File System Access API, never copied and never uploaded.
 //
 // Usage:
 //
-//	whitesoft                     # 启动桌面端，文件都在浏览器里打开，不需要目录
-//	whitesoft tui --root ~/boards # 终端管理器浏览哪个目录
-//	whitesoft --port 9000         # 指定端口，默认自动挑一个空闲端口
-//	whitesoft --no-open           # 只启动服务，不打开浏览器
-//	whitesoft tui                 # 终端管理器，基于 go-tui
+//	whitesoft                     # 打开桌面窗口
+//	whitesoft --port 9000         # 指定端口（默认 8787，被占用时自动顺延）
+//	whitesoft --no-window         # 只起本地服务，用浏览器访问打印出的地址
+//	whitesoft serve               # 同上，语义更清楚的写法
+//	whitesoft --version
 package main
 
 import (
@@ -19,184 +22,189 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
-	"github.com/cutx64/WhiteSoft/desktop/internal/launcher"
-	"github.com/cutx64/WhiteSoft/desktop/internal/tui"
+	"github.com/cutx64/WhiteSoft/desktop/internal/desktop"
+	"github.com/cutx64/WhiteSoft/desktop/internal/server"
+	"github.com/cutx64/WhiteSoft/desktop/internal/webapp"
 )
 
-const version = "1.0.0"
-
-type options struct {
-	root    string
-	port    int
-	host    string
-	server  string
-	node    string
-	noOpen  bool
-	showVer bool
-	help    bool
-}
+const version = "2.0.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "错误："+err.Error())
+		if errors.Is(err, desktop.ErrNoRuntime) {
+			os.Exit(2)
+		}
 		os.Exit(1)
 	}
 }
 
+type options struct {
+	port     int
+	host     string
+	width    int
+	height   int
+	noWindow bool
+	debug    bool
+	version  bool
+}
+
 func run(args []string) error {
-	// `whitesoft tui [...]` is a sub-command; everything else is desktop mode.
-	mode := "desktop"
+	// `whitesoft serve` is a sub-command; everything else is desktop mode.
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		mode = args[0]
-		args = args[1:]
+		switch args[0] {
+		case "serve":
+			args = append([]string{"--no-window"}, args[1:]...)
+		case "desktop":
+			args = args[1:]
+		default:
+			return fmt.Errorf("未知子命令 %q，可用的是 serve", args[0])
+		}
 	}
 
-	opts, err := parseFlags(mode, args)
+	opts, err := parseFlags(args)
 	if err != nil {
 		return err
 	}
-	if opts.help {
-		return nil // the usage was already printed by the flag set
-	}
-	if opts.showVer {
+	if opts.version {
 		fmt.Printf("WhiteSoft 桌面端 %s\n", version)
+		if v := desktop.WebView2Version(); v != "" {
+			fmt.Printf("WebView2  : %s\n", v)
+		}
 		return nil
 	}
-	// The desktop app needs no directory at all — boards are opened from the
-	// browser.  Only the terminal manager browses a folder of `.note` files.
-	if mode == "tui" {
-		if opts.root == "" {
-			opts.root, err = defaultRoot(opts.server)
-			if err != nil {
-				return err
-			}
-		}
-		if st, err := os.Stat(opts.root); err != nil || !st.IsDir() {
-			return fmt.Errorf("目录不存在：%s", opts.root)
-		}
-	}
-
-	switch mode {
-	case "desktop":
-		return runDesktop(opts)
-	case "tui":
-		return tui.Run(tui.Options{
-			Root: opts.root, Server: opts.server, Node: opts.node, Port: opts.port, Open: false,
-		})
-	default:
-		return fmt.Errorf("未知子命令 %q，可用的是 tui", mode)
-	}
+	return runApp(opts)
 }
 
-func parseFlags(mode string, args []string) (options, error) {
+func parseFlags(args []string) (options, error) {
 	var opts options
-	fs := flag.NewFlagSet("whitesoft "+mode, flag.ContinueOnError)
+	fs := flag.NewFlagSet("whitesoft", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	usage := "启动桌面端，内嵌网页界面"
-	if mode == "tui" {
-		usage = "打开终端管理器"
-	}
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "WhiteSoft %s — %s\n\n", version, usage)
-		if mode == "tui" {
-			fmt.Fprintf(os.Stderr, "用法：\n  whitesoft tui\n  whitesoft tui --root ~/my-boards\n\n")
-		} else {
-			fmt.Fprintf(os.Stderr, "用法：\n  whitesoft\n  whitesoft --port 8788\n\n")
-		}
-		fmt.Fprintln(os.Stderr, "选项：")
+		fmt.Fprintf(os.Stderr, "WhiteSoft %s — 本地白板桌面端（内嵌网页界面，不需要 Node.js）\n\n", version)
+		fmt.Fprint(os.Stderr, "用法：\n  whitesoft                打开桌面窗口\n  whitesoft serve          只起本地服务，用浏览器访问\n\n选项：\n")
 		fs.PrintDefaults()
 	}
-	fs.StringVar(&opts.root, "root", "", "终端管理器浏览的目录，仅 tui 子命令使用")
 	fs.IntVar(&opts.port, "port", 0, "监听端口，默认 8787，被占用时自动顺延；指定后严格使用")
-	// the default is resolved by the launcher, so the flag set does not print
-	// a "(default ...)" line of its own
-	fs.StringVar(&opts.host, "host", "", "监听地址，默认 127.0.0.1")
-	fs.StringVar(&opts.server, "server", "", "server.mjs 的路径，默认自动查找")
-	fs.StringVar(&opts.node, "node", "", "node 可执行文件，默认用 PATH 里的 node")
-	fs.BoolVar(&opts.noOpen, "no-open", false, "只启动服务，不打开浏览器")
-	fs.BoolVar(&opts.showVer, "version", false, "显示版本")
+	fs.StringVar(&opts.host, "host", "127.0.0.1", "监听地址；改成 0.0.0.0 会暴露到局域网")
+	fs.IntVar(&opts.width, "width", 1440, "窗口宽度（像素）")
+	fs.IntVar(&opts.height, "height", 900, "窗口高度（像素）")
+	fs.BoolVar(&opts.noWindow, "no-window", false, "不开窗口，只启动本地服务并打印地址")
+	fs.BoolVar(&opts.debug, "debug", false, "打开开发者工具与右键菜单，便于排查界面问题")
+	fs.BoolVar(&opts.version, "version", false, "显示版本")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			opts.help = true
 			return opts, nil
 		}
 		return opts, err
 	}
+	if opts.port < 0 || opts.port > 65535 {
+		return opts, fmt.Errorf("端口非法：%d", opts.port)
+	}
 	return opts, nil
 }
 
-// defaultRoot is only used by the terminal manager: the folder it browses
-// defaults to the parent of the repository.
-func defaultRoot(serverJS string) (string, error) {
-	path, err := launcher.FindServerJS(serverJS)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Dir(filepath.Dir(path)), nil
-}
+func runApp(opts options) error {
+	logger := log.New(os.Stdout, "", log.LstdFlags)
 
-func runDesktop(opts options) error {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	fmt.Println("WhiteSoft — 桌面端")
-	fmt.Println("──────────────────────────────────────────────")
-
-	nodeBin, nodeVersion, err := launcher.FindNode(opts.node)
+	assets, err := webapp.FS()
 	if err != nil {
 		return err
 	}
-	serverJS, err := launcher.FindServerJS(opts.server)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("Node      : %s\n", nodeVersion)
-	fmt.Printf("Node 路径 : %s\n", nodeBin)
-	fmt.Printf("服务端    : %s\n", serverJS)
 
-	srv, err := launcher.Start(ctx, launcher.Config{
-		ServerJS: serverJS,
-		NodeBin:  nodeBin,
-		Port:     opts.port,
-		Host:     opts.host,
-		Log:      os.Stdout,
+	srv, err := server.Start(server.Config{
+		Assets: assets,
+		Host:   opts.host,
+		Port:   opts.port,
+		Logger: logger,
 	})
 	if err != nil {
 		return err
 	}
 	defer func() {
-		if err := srv.Stop(); err != nil {
-			fmt.Fprintln(os.Stderr, "停止服务失败："+err.Error())
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_ = srv.Stop(ctx)
+	}()
+
+	banner(os.Stdout, srv, opts)
+	if srv.Note() != "" {
+		fmt.Println(srv.Note())
+	}
+
+	if opts.noWindow {
+		return runHeadless(srv)
+	}
+
+	// The window blocks the calling goroutine (and owns the process main
+	// thread), so the shutdown plumbing lives in its own goroutine.
+	shutdown := make(chan struct{})
+	go func() {
+		select {
+		case <-srv.Done():
+			if err := srv.Err(); err != nil {
+				fmt.Fprintln(os.Stderr, "本地服务意外退出："+err.Error())
+			}
+		case <-shutdown:
 		}
 	}()
 
-	if note := srv.Note(); note != "" {
-		fmt.Println(note)
-	}
-	fmt.Printf("界面地址  : %s\n", srv.URL())
-	if opts.noOpen {
-		fmt.Println("已跳过打开浏览器")
-	} else if err := launcher.OpenBrowser(srv.URL()); err != nil {
-		fmt.Fprintf(os.Stderr, "打不开浏览器：%v，请手动访问上面的地址\n", err)
-	} else {
-		fmt.Println("已在浏览器中打开界面")
-	}
-	fmt.Println("停止服务  : Ctrl+C")
-	fmt.Println("──────────────────────────────────────────────")
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-sig
+		// Closing the window ends `Open`; the deferred Stop closes the socket.
+		os.Exit(0)
+	}()
 
+	res := desktop.Open(desktop.Options{
+		Title:  "WhiteSoft — 本地白板",
+		URL:    srv.URL(),
+		Width:  opts.width,
+		Height: opts.height,
+		Debug:  opts.debug,
+	})
+	close(shutdown)
+	fmt.Println("窗口已关闭")
+	return res.Err
+}
+
+// runHeadless keeps serving until Ctrl+C, printing the address to open.
+func runHeadless(srv *server.Server) error {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	select {
-	case <-ctx.Done():
+	case <-sig:
 		fmt.Println("\n正在退出 …")
+		return nil
 	case <-srv.Done():
 		if err := srv.Err(); err != nil {
-			return fmt.Errorf("server.mjs 意外退出：%w", err)
+			return fmt.Errorf("本地服务意外退出：%w", err)
 		}
+		return nil
 	}
-	return nil
+}
+
+func banner(w *os.File, srv *server.Server, opts options) {
+	fmt.Fprintf(w, "\nWhiteSoft %s — 本地白板（桌面端）\n", version)
+	fmt.Fprintln(w, "──────────────────────────────────────────────")
+	fmt.Fprintf(w, "界面地址 : %s\n", srv.URL())
+	fmt.Fprintf(w, "服务     : Go 内置（已内嵌网页界面，不需要 Node.js）\n")
+	if v := desktop.WebView2Version(); v != "" {
+		fmt.Fprintf(w, "渲染引擎 : WebView2 %s\n", v)
+	}
+	fmt.Fprintln(w, "打开白板 : 界面里用「打开」选择本机的 .note / .pdf（文件不会被复制或上传）")
+	if opts.noWindow {
+		fmt.Fprintln(w, "停止服务 : Ctrl+C")
+	} else {
+		fmt.Fprintln(w, "关闭窗口 : 退出程序并停止本地服务")
+	}
+	fmt.Fprintln(w, "──────────────────────────────────────────────")
 }
