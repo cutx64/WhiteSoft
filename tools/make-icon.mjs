@@ -131,6 +131,54 @@ function zlibDeflate(buf) {
   return zlib.deflateSync(buf, { level: 9 });
 }
 
+/**
+ * Encodes an RGBA buffer as a 32-bit BMP icon entry.
+ *
+ * Only the 256 px image may be stored as PNG inside an icon. Older shell APIs,
+ * including the one behind the shortcut's "change icon" dialog, cannot read a
+ * PNG at 16, 32 or 48 px and fall back to the generic icon. Those sizes are
+ * therefore written the classic way: a bottom-up BGRA bitmap plus the 1-bit
+ * transparency mask that the format requires.
+ */
+function dib(size, rgba) {
+  const header = Buffer.alloc(40);
+  header.writeUInt32LE(40, 0);              // header size
+  header.writeInt32LE(size, 4);             // width
+  header.writeInt32LE(size * 2, 8);         // height: colour + mask
+  header.writeUInt16LE(1, 12);              // planes
+  header.writeUInt16LE(32, 14);             // bits per pixel
+  header.writeUInt32LE(0, 16);              // no compression
+  header.writeUInt32LE(size * size * 4, 20); // colour data size
+
+  const colour = Buffer.alloc(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    const srcRow = y * size * 4;
+    const dstRow = (size - 1 - y) * size * 4;      // bottom-up
+    for (let x = 0; x < size; x++) {
+      const s = srcRow + x * 4;
+      const d = dstRow + x * 4;
+      colour[d] = rgba[s + 2];       // B
+      colour[d + 1] = rgba[s + 1];   // G
+      colour[d + 2] = rgba[s];       // R
+      colour[d + 3] = rgba[s + 3];   // A
+    }
+  }
+
+  const maskStride = Math.ceil(size / 32) * 4;
+  const mask = Buffer.alloc(maskStride * size);
+  for (let y = 0; y < size; y++) {
+    const srcRow = y * size * 4;
+    const dstRow = (size - 1 - y) * maskStride;
+    for (let x = 0; x < size; x++) {
+      // A pixel that is fully transparent is marked opaque to the mask.
+      if (rgba[srcRow + x * 4 + 3] === 0) {
+        mask[dstRow + (x >> 3)] |= 0x80 >> (x & 7);
+      }
+    }
+  }
+  return Buffer.concat([header, colour, mask]);
+}
+
 let crcTable = null;
 function crc32(buf) {
   if (!crcTable) {
@@ -175,7 +223,11 @@ function ico(images) {
 
 /* -------------------------------------------------------------------- main */
 
-const images = SIZES.map((size) => ({ size, data: png(size, render(size)) }));
+// 256 px may be PNG; every smaller size has to be a bitmap for the shell APIs.
+const images = SIZES.map((size) => {
+  const rgba = render(size);
+  return { size, data: size >= 256 ? png(size, rgba) : dib(size, rgba) };
+});
 const icon = ico(images);
 
 fs.writeFileSync(path.join(OUT_DIR, 'favicon.ico'), icon);

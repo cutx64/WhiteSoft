@@ -61,6 +61,9 @@ if (-not $NoStrip) { $flags += @("-s", "-w") }
 if ($guiBuild) { $flags += "-H", "windowsgui" }
 $ldflags = $flags -join " "
 
+# 同时放一份独立图标文件，方便给快捷方式指定图标：exe 内嵌图标在某些
+# 环境里无法被「更改图标」对话框读取，独立 ico 文件没有这个问题。
+Copy-Item ..\public\favicon.ico whitesoft.ico -Force
 Write-Host "编译 $Output ..."
 $goArgs = @("build", "-trimpath")
 if ($ldflags) { $goArgs += @("-ldflags", $ldflags) }

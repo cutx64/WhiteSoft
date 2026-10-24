@@ -27,3 +27,4 @@ desktop/debug.log
 # 由 winres/app.rc 编译出的 Windows 资源，随构建生成
 app_windows_amd64.syso
 desktop/whitesoft-console.exe
+desktop/whitesoft.ico
