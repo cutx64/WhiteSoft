@@ -113,7 +113,7 @@ export class UI {
 
     this.menubar = el('header', { class: 'wb-menubar' },
       el('div', { class: 'wb-brand' },
-        el('span', { class: 'wb-logo', html: svg('<path d="M3 4h18v13H3z"/><path d="M7 21l3-4M17 21l-3-4"/>', 20) }),
+        el('img', { class: 'wb-logo', src: 'brand.svg', alt: 'WhiteSoft', width: 17, height: 17 }),
         el('span', { class: 'wb-brandname', text: 'WhiteSoft' }),
       ),
       menuBtn('文件', () => this.fileMenu()),

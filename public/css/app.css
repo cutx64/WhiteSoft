@@ -52,7 +52,12 @@ button { font-family: inherit; }
   -webkit-user-select: none; user-select: none;
 }
 .wb-menubar .wb-brand { display: flex; align-items: center; gap: 7px; margin-right: 10px; min-width: 0; }
-.wb-menubar .wb-logo { color: var(--accent); display: flex; }
+/* The application's own mark, the same artwork as the executable and the
+   browser tab. It is drawn as vector so it stays sharp at any display scale. */
+.wb-menubar .wb-logo {
+  display: block; flex: none;
+  width: 17px; height: 17px;
+}
 .wb-menubar .wb-brandname { font-weight: 600; font-size: 13px; letter-spacing: .1px; white-space: nowrap; }
 .wb-menu-btn {
   font: inherit; font-size: 12.5px; color: var(--ink-2);

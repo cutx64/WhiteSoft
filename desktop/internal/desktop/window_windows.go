@@ -71,6 +71,7 @@ func Open(opts Options) Result {
 	}
 	defer w.Destroy()
 
+	applyWindowIcon(w.Window())
 	w.SetTitle(opts.Title)
 	w.SetSize(opts.Width, opts.Height, webview.HintNone)
 	w.Navigate(opts.URL)
