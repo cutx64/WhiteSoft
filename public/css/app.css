@@ -38,33 +38,110 @@ button { font-family: inherit; }
 #wb-app {
   position: fixed; inset: 0;
   display: grid;
-  grid-template-rows: 48px 1fr;
+  grid-template-rows: 40px 36px 1fr;
   background: var(--surface-2);
 }
 
-/* ---------------- title bar ---------------- */
-.wb-titlebar {
-  display: flex; align-items: center; gap: 14px;
-  padding: 0 12px;
+/* ---------------- menu bar ---------------- */
+.wb-menubar {
+  display: flex; align-items: center; gap: 2px;
+  padding: 0 8px;
   background: var(--surface);
   border-bottom: 1px solid var(--line);
-  z-index: 30;
+  z-index: 32;
+  -webkit-user-select: none; user-select: none;
 }
-.wb-brand { display: flex; align-items: center; gap: 9px; min-width: 168px; }
-.wb-logo { color: var(--accent); display: flex; }
-.wb-brandname { font-weight: 600; font-size: 15px; letter-spacing: .1px; }
-.wb-titlewrap { flex: 1; display: flex; align-items: center; gap: 10px; justify-content: center; }
-.wb-title {
-  font: inherit; font-size: 14px; font-weight: 600;
+.wb-menubar .wb-brand { display: flex; align-items: center; gap: 7px; margin-right: 10px; min-width: 0; }
+.wb-menubar .wb-logo { color: var(--accent); display: flex; }
+.wb-menubar .wb-brandname { font-weight: 600; font-size: 13px; letter-spacing: .1px; white-space: nowrap; }
+.wb-menu-btn {
+  font: inherit; font-size: 12.5px; color: var(--ink-2);
   border: 1px solid transparent; background: transparent;
-  padding: 5px 10px; border-radius: var(--radius-sm);
-  min-width: 200px; max-width: 420px; text-align: center;
+  padding: 4px 10px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.wb-menu-btn:hover { background: var(--surface-3); color: var(--ink); }
+.wb-menu-btn.open { background: var(--accent-soft); color: var(--accent); }
+.wb-menubar-spacer { flex: 1; }
+.wb-menubar-actions { display: flex; align-items: center; gap: 2px; }
+.wb-title {
+  font: inherit; font-size: 12.5px; font-weight: 600;
+  border: 1px solid transparent; background: transparent;
+  padding: 4px 8px; border-radius: var(--radius-sm);
+  width: 200px; text-align: center;
   color: var(--ink);
 }
 .wb-title:hover { background: var(--surface-3); }
 .wb-title:focus { outline: none; background: var(--surface); border-color: var(--accent); text-align: left; }
-.wb-savestate { font-size: 12px; color: var(--ink-3); }
-.wb-titleactions { display: flex; gap: 4px; }
+.wb-savestate { font-size: 11.5px; color: var(--ink-3); white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Dropdown used by the menu bar. */
+.wb-menu {
+  position: fixed; z-index: 90; min-width: 232px; padding: 6px;
+  background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--radius-md); box-shadow: 0 10px 30px rgba(15, 25, 40, .18);
+  animation: wb-pop .12s ease-out;
+}
+.wb-menu-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  font: inherit; font-size: 12.5px; color: var(--ink);
+  border: 0; background: transparent; text-align: left;
+  padding: 7px 10px; border-radius: var(--radius-sm); cursor: pointer;
+}
+.wb-menu-item:hover { background: var(--accent-soft); color: var(--accent); }
+.wb-menu-item:disabled { opacity: .4; cursor: default; background: transparent; color: var(--ink); }
+.wb-menu-item .wb-menu-key { margin-left: auto; font-size: 11px; color: var(--ink-3); }
+.wb-menu-sep { height: 1px; background: var(--line); margin: 5px 6px; }
+.wb-menu-label { font-size: 10.5px; letter-spacing: .4px; text-transform: uppercase; color: var(--ink-3); padding: 6px 10px 4px; }
+
+/* ---------------- document tabs ---------------- */
+.wb-tabstrip {
+  display: flex; align-items: stretch; gap: 2px;
+  padding: 0 6px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto; overflow-y: hidden;
+  z-index: 31;
+  -webkit-user-select: none; user-select: none;
+  scrollbar-width: thin;
+}
+.wb-tabstrip::-webkit-scrollbar { height: 4px; }
+.wb-tab {
+  display: flex; align-items: center; gap: 7px;
+  max-width: 210px; min-width: 108px;
+  padding: 0 6px 0 11px;
+  font-size: 12px; color: var(--ink-2);
+  background: transparent; border: 1px solid transparent; border-bottom: 0;
+  border-radius: 7px 7px 0 0; cursor: pointer;
+  position: relative; flex: none;
+}
+.wb-tab:hover { background: rgba(15, 108, 189, .06); color: var(--ink); }
+.wb-tab.active {
+  background: var(--surface); color: var(--ink); font-weight: 600;
+  border-color: var(--line);
+}
+.wb-tab.active::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+  background: var(--accent); border-radius: 2px 2px 0 0;
+}
+.wb-tab-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wb-tab-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+.wb-tab-dot.clean { background: transparent; }
+.wb-tab-close {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; flex: none;
+  border: 0; border-radius: 4px; background: transparent;
+  color: var(--ink-3); cursor: pointer; font-size: 15px; line-height: 1;
+  opacity: 0; transition: opacity .1s, background .1s;
+}
+.wb-tab:hover .wb-tab-close, .wb-tab.active .wb-tab-close { opacity: 1; }
+.wb-tab-close:hover { background: var(--line); color: var(--ink); }
+.wb-tab-new {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; flex: none; margin: 3px 0;
+  border: 1px solid transparent; border-radius: var(--radius-sm);
+  background: transparent; color: var(--ink-3); cursor: pointer; font-size: 16px;
+}
+.wb-tab-new:hover { background: var(--surface-3); color: var(--ink); }
 
 /* ---------------- buttons ---------------- */
 .wb-btn {

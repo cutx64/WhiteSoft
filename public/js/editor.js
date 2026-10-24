@@ -29,11 +29,11 @@ export class Editor {
     this.resources = new ResourceStore();
     this.pdf = new PdfManager();
     this.history = new History();
-    // LaTeX bitmaps arrive asynchronously (MathJax typesets synchronously, the
-    // SVG decode does not), so a late one must repaint the cached layer — the
-    // same path a late image takes.
+    // LaTeX bitmaps arrive asynchronously, MathJax typesets synchronously
+    // while the SVG decode does not, so a late one must repaint the cached
+    // layer — the same path a late image takes.
     setRasterHandler(() => this.#scheduleSoftInvalidate());
-    // Any undo/redo (or a new entry) must repaint straight away: the history
+    // Any undo/redo, or a new entry, must repaint straight away: the history
     // closures mutate the page directly, so nothing else would invalidate the
     // render cache and the change would only appear on the next interaction.
     this.history.onChange = () => { this.invalidate(); this.onSelectionChange?.(); this.onChange?.(); };
@@ -48,7 +48,7 @@ export class Editor {
     this.tool = 'pen';
     this.prevTool = 'pen';
     this.shapeKind = T.RECT;
-    /** Which curve family the 'curve' shape kind draws (see curvePointsFor). */
+    /** Which curve family the 'curve' shape kind draws, see curvePointsFor. */
     this.shapeCurve = 'parabola';
     this.selection = new Set();
     this.live = null;
@@ -102,17 +102,32 @@ export class Editor {
   get page() { return this.doc.pages[this.pageIndex] || createPage(); }
   get pageCount() { return this.doc.pages.length; }
 
-  setDocument(doc, { keepView = false } = {}) {
+  /**
+   * Show `doc` in the editor.
+   *
+   * Each open board owns its own image cache and its own undo stack, and those
+   * are passed in here, so switching documents does not throw away either one.
+   * A caller that does not pass them gets fresh instances, which is what a
+   * plain "open a file and forget the last one" flow wants.
+   */
+  setDocument(doc, { keepView = false, resources = null, history = null } = {}) {
     this.doc = doc;
+    if (resources) this.resources = resources;
+    if (history) {
+      this.history = history;
+      this.history.onChange = () => { this.invalidate(); this.onSelectionChange?.(); this.onChange?.(); };
+    }
     this.pageIndex = clamp(doc.currentPage || 0, 0, doc.pages.length - 1);
     this.selection.clear();
-    this.history.clear();
+    // A tab that hands in its own history keeps it; a fresh one just got an
+    // empty stack anyway.
+    if (!history) this.history.clear();
     this.version++;
     // The PDF layer is page state, exactly like `gotoPage` treats it: leaving it
     // in place painted the *previous* board's PDF page as the first frame of the
     // new document, and since `syncPdf()` only clears the cache after that frame
     // was drawn, the stale picture stayed on screen until the user touched
-    // something (`Shift+N` on a PDF-backed board).
+    // something, as `Shift+N` on a PDF-backed board does.
     this._pdfPages = null;
     this._pdfKey = null;
     this._loadingPdf = false;
@@ -173,7 +188,7 @@ export class Editor {
 
   /**
    * Coalesced soft invalidation for content that arrives asynchronously
-   * (image bitmaps, MathJax rasters, sharper PDF pages).  Bumping `version`
+   * image bitmaps, MathJax rasters, sharper PDF pages.  Bumping `version`
    * makes the renderer treat the cached raster as stale, but the rebuild is
    * deferred while the user is mid-gesture so interactions never stall.
    */
@@ -197,8 +212,39 @@ export class Editor {
     });
   }
 
-  /** Force the world-space cache to be rebuilt (content or zoom changed). */
-  invalidate() { this.version++; this.renderer.invalidate(); this.requestRender(); }
+  /** Force the world-space cache to be rebuilt, content or zoom changed. */
+  /**
+   * Content changed.
+   *
+   * With a `region`, only that part of the cached raster is redrawn, which is
+   * what keeps a stroke from costing a full page repaint. Without one, the
+   * whole raster is rebuilt, which is what a structural change needs.
+   *
+   * A region may also arrive through `regionFor` on the editor, which lets an
+   * operation describe its change once even when the repaint is requested by a
+   * hook it does not control, such as the undo stack.
+   */
+  invalidate(region = null) {
+    this.version++;
+    const r = region || this.regionFor;
+    if (r) this.renderer.invalidateRegion(r);
+    else this.renderer.invalidate();
+    this.requestRender();
+  }
+
+  /**
+   * Run `fn` with `region` standing in for the area this operation changes.
+   *
+   * Inside the call, any repaint request without a region of its own is patched
+   * into that box instead of rebuilding the page. Used around a history push,
+   * whose change notification arrives before the caller gets a chance to
+   * describe what changed.
+   */
+  withRegion(region, fn) {
+    const prev = this.regionFor;
+    this.regionFor = region;
+    try { return fn(); } finally { this.regionFor = prev; }
+  }
 
   draw() {
     const s = {
@@ -216,7 +262,7 @@ export class Editor {
       interacting: this.mode !== 'idle' || (performance.now() - (this._lastCameraChange || 0) < 120),
       live: this.live,
       // The element currently open in the DOM inline editor draws its raw text
-      // on the canvas (the transparent textarea sits right on top of it).
+      // on the canvas, the transparent textarea sits right on top of it.
       editing: this.inline?.current || null,
       overlay: (ctx, env) => {
         this.currentTool?.overlay?.(this, ctx, env);
@@ -315,12 +361,12 @@ export class Editor {
   }
 
   /**
-   * The page's paper (its PDF backdrop) and its content, in world units.
+   * The page's paper, its PDF backdrop, and its content, in world units.
    *
    * A PDF page that renders as a blank white sheet is *not* paper: boards whose
    * scans were pasted over an empty PDF would otherwise be framed around an
    * empty rectangle.  `blankBackdrop` is filled in once the page has been
-   * rasterised (see `syncPdf`), and is undefined while that is unknown — an
+   * rasterised, see `syncPdf`, and is undefined while that is unknown — an
    * unknown backdrop counts as paper, i.e. the view a PDF page always had.
    */
   #pageRects(index) {
@@ -346,7 +392,7 @@ export class Editor {
    * Where the current page begins: the top-left of its sheet, or the world
    * origin for a page the view is framed around from there instead — a new
    * page, or one whose PDF sheet turned out to be a blank white page and is
-   * therefore not a backdrop at all (see `#pageRects`).  Pasting into an empty
+   * therefore not a backdrop at all, see `#pageRects`.  Pasting into an empty
    * page puts the picture here, so that it lands where the page itself starts
    * rather than wherever the sheet happens to sit in the world.
    */
@@ -406,13 +452,13 @@ export class Editor {
   /**
    * Where a page starts when the view is put on it.
    *
-   * A sheet of paper starts at its own top-left and is centred left-right (see
-   * `centerPage`) — the display a PDF-backed page always had.
+   * A sheet of paper starts at its own top-left and is centred left-right,
+   * see `centerPage`, giving the display that a PDF-backed page always had.
    *
    * A page without a backdrop has no paper to frame, so it starts at its
    * **leftmost content**, and at the top of that leftmost column rather than at
-   * the global top of the page: a column further right (or a single tall
-   * picture) may reach higher, and anchoring there would push the page's real
+   * the global top of the page: a column further right, or a single tall
+   * picture, may reach higher, and anchoring there would push the page's real
    * beginning down and leave a blank strip in the top-left corner.
    */
   anchorOfPage(index) {
@@ -423,7 +469,7 @@ export class Editor {
     // which is where a new page begins and where pasted content is put.
     if (!content) return { left: 0, top: 0, w: this.view.w / this.camera.zoom, centred: false };
     // Everything that starts at the left edge, give or take a sliver, counts as
-    // the leftmost column (scans pasted side by side rarely line up exactly).
+    // the leftmost column, scans pasted side by side rarely line up exactly.
     const strip = Math.max(4, Math.min(content.w * 0.04, 160));
     let top = null;
     for (const e of this.doc.pages[index].elements) {
@@ -570,20 +616,24 @@ export class Editor {
    * ---------------------------------------------------------------- */
   addElement(e, { select = false, record = true, label = '添加' } = {}) {
     this.page.elements.push(e);
+    // A new element only changes its own box, so the box is handed to the
+    // history push as well: that push asks for a repaint on its own, before the
+    // line below runs, and without this it would force a full page rebuild.
+    const region = elementBounds(e);
     if (record) {
-      this.history.push(label,
+      this.withRegion(region, () => this.history.push(label,
         () => { const i = this.page.elements.indexOf(e); if (i >= 0) this.page.elements.splice(i, 1); this.selection.delete(e); },
-        () => { this.page.elements.push(e); });
+        () => { this.page.elements.push(e); }));
     }
     if (select) { this.selection.clear(); this.selection.add(e); this.onSelectionChange?.(); }
-    this.invalidate();
+    this.invalidate(region);
     this.onContentChange?.();
     this.onChange?.();
     return e;
   }
 
   /**
-   * Add several elements as one shape (a hyperbola is two branches): a single
+   * Add several elements as one shape, a hyperbola is two branches: a single
    * history entry, one undo, and all of them selected together.
    */
   addElements(list, { select = false, record = true, label = '添加' } = {}) {
@@ -761,7 +811,7 @@ export class Editor {
 
   restore(snap) {
     // Undo replaces element objects wholesale, so the selection has to be
-    // re-pointed at the restored copies (by index) or it would keep referring
+    // re-pointed at the restored copies, by index, or it would keep referring
     // to detached objects.
     const cur = this.page.elements;
     const keepIdx = new Set();
@@ -920,7 +970,7 @@ export class Editor {
   /* ---------------------------------------------------------------- *
    * Tools
    * ---------------------------------------------------------------- */
-  /** Switch between the three pen slots (Alt+1/2/3 in Whiteboard). */
+  /** Switch between the three pen slots, Alt+1/2/3 in Whiteboard. */
   selectPen(i) {
     if (i < 0 || i >= this.pens.length) return;
     this.activePen = i;
@@ -974,7 +1024,11 @@ export class Editor {
 
   #onPointerDown(ev) {
     if (this.host.querySelector('.wb-inline-editor')) this.commitInlineEditor();
-    this.canvas.setPointerCapture?.(ev.pointerId);
+    // Capture keeps the stroke alive when the pointer leaves the canvas. The
+    // call throws for a pointer id the browser does not consider active, which
+    // happens when the pen was lifted somewhere else first, and letting that
+    // escape would abort the whole gesture before it starts.
+    try { this.canvas.setPointerCapture?.(ev.pointerId); } catch { /* not captured */ }
     const sp = this.#localPoint(ev);
     const wp = screenToWorld(this.camera, sp.x, sp.y);
     this.pointers.set(ev.pointerId, sp);
@@ -1054,7 +1108,7 @@ export class Editor {
     const sp = this.#localPoint(ev);
     const wp = screenToWorld(this.camera, sp.x, sp.y);
     this.pointers.delete(ev.pointerId);
-    this.canvas.releasePointerCapture?.(ev.pointerId);
+    try { this.canvas.releasePointerCapture?.(ev.pointerId); } catch { /* never captured */ }
     if (this.mode === 'pinch') {
       if (this.pointers.size < 2) { this.mode = 'idle'; this._pinch = null; }
       return;
@@ -1074,9 +1128,9 @@ export class Editor {
   }
 
   /**
-   * Topmost element under a world point.  Objects (text, notes, tables,
-   * images, reactions) are picked anywhere inside their box; strokes and
-   * shapes need the pointer to be near their outline.
+   * Topmost element under a world point.  Text, notes, tables, images and
+   * reactions are picked anywhere inside their box; strokes and shapes need
+   * the pointer to be near their outline.
    */
   pickAt(p, tol) {
     const t = tol == null ? 6 / this.camera.zoom : tol;
@@ -1102,7 +1156,7 @@ export class Editor {
 
   /**
    * Where a screen point falls on the ruler, if it is showing:
-   * 'rotate' (the grip at the right end), 'body', or null.
+   * 'rotate', the grip at the right end, 'body', or null.
    * The ruler lives above the drawing surface, so it is grabbed before the
    * active tool ever sees the event — exactly like Whiteboard.
    */

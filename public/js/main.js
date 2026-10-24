@@ -1,9 +1,10 @@
 /**
  * Application entry point: wires the editor, the UI and all document-level
- * commands (open / save / import PDF / insert image / export).
+ * commands: open, save, import PDF, insert image and export.
  */
 import { $, el, download, formatBytes, clamp, argbToRgba } from './util.js';
 import { Editor } from './editor.js';
+import { Workspace, DocTab } from './workspace.js';
 import { UI } from './ui.js';
 import { InlineEditor } from './inlineeditor.js';
 import { SceneRenderer } from './render.js';
@@ -47,9 +48,20 @@ class App {
     this.autoSaveMaxAt = null;        // when the ceiling fires
     this.autoSaveDeadline = null;     // when the idle countdown fires
     this.editor.doc.name = '未命名白板';
+    // The first board is a tab like any other, so the tab strip and the open
+    // document list are never out of step.
+    this.workspace = new Workspace(this.editor);
+    const first = new DocTab(this.editor.doc);
+    first.resources = this.editor.resources;
+    first.history = this.editor.history;
+    this.workspace.tabs.push(first);
+    this.workspace.activeId = first.id;
+    this.workspace.onChange = () => this.ui.syncTabs();
     this.ui.titleInput.value = this.editor.doc.name;
     this.bindGlobal();
     this.ui.syncStatus();
+    this.ui.syncTabs();
+    this.syncWorkspace();
     // A brand new board opens at the default zoom, not fitted.
     this.editor.setZoom(this.editor.defaultZoom);
     this.editor.centerPage();
@@ -68,7 +80,7 @@ class App {
    * for a pause that may never come.
    * ---------------------------------------------------------------- */
 
-  /** Idle period of the current setting, in milliseconds (0 = off). */
+  /** Idle period of the current setting, in milliseconds, 0 means off. */
   #idleMs() {
     return Math.max(200, this.autoSaveMinutes * 60 * 1000);
   }
@@ -135,7 +147,7 @@ class App {
     }
   }
 
-  /** The idle period (or the ceiling) elapsed. */
+  /** The idle period, or the ceiling, elapsed. */
   autoSaveIdle({ ceiling = false } = {}) {
     const written = this.autoSaveNow();
     // `save()` re-arms both timers by itself, and it is the only path that
@@ -177,10 +189,10 @@ class App {
   /**
    * The handle Ctrl+S writes into, if the browser gave us one.
    *
-   * A board opened through `showOpenFilePicker` (or saved once through
-   * `showSaveFilePicker`) owns a real file; a board dragged in from the desktop
-   * has only a read-only snapshot, and asking it for permission would need a
-   * user gesture, so autosave stays quiet in that case.
+   * A board opened through `showOpenFilePicker`, or saved once through
+   * `showSaveFilePicker`, owns a real file; a board dragged in from the
+   * desktop has only a read-only snapshot, and asking it for permission
+   * would need a user gesture, so autosave stays quiet in that case.
    */
   #writableHandle() {
     return this.editor.doc.fileHandle || null;
@@ -189,14 +201,17 @@ class App {
   markModified() {
     if (this.modified) return;
     this.modified = true;
-    // A fresh dirty stretch: start the idle countdown (and the ceiling) now.
-    // Later edits in the same stretch are handled by noteActivity().
+    this.#touchTab();
+    // A fresh dirty stretch: start the idle countdown and the ceiling now.
+    // Later edits in the same stretch are handled by noteActivity.
     this.noteActivity();
     this.syncAutoSaveState();
   }
 
   markSaved() {
     this.modified = false;
+    const tab = this.workspace?.active;
+    if (tab) { tab.dirty = false; this.ui?.syncTabs(); }
     this.autoSaveDeadline = null;
     this.autoSaveMaxAt = null;
     this.syncAutoSaveState();
@@ -210,8 +225,9 @@ class App {
       const wasClean = !this.modified;
       this.markModified();
       // Only a change made while the board was already dirty can move the
-      // countdown: an `onContentChange` that changed nothing (a gesture that
-      // ended where it started) must not keep pushing the save away.
+      // countdown: an `onContentChange` that changed nothing, such as a
+      // gesture that ended where it started, must not keep pushing the save
+      // away.
       if (!wasClean) this.noteActivity();
     };
     window.addEventListener('resize', () => this.editor.resize());
@@ -271,6 +287,8 @@ class App {
         case 'a': e.preventDefault(); ed.selectAll(); return;
         case 's': e.preventDefault(); if (e.shiftKey) this.saveAs(); else this.save(); return;
         case 'o': e.preventDefault(); this.showOpenDialog(); return;
+        case 't': e.preventDefault(); this.newTab(); return;
+        case 'w': e.preventDefault(); this.closeActiveTab(); return;
         case 'i': if (e.shiftKey) { e.preventDefault(); this.pickPdf(); } return;
         case 'n': if (e.altKey) { e.preventDefault(); ed.addPageAfter(); this.ui.syncPages(); } return;
         case 'p':
@@ -374,7 +392,7 @@ class App {
       if (alt) { e.preventDefault(); alt(); return; }
     }
 
-    // --- digits select the nth toolbar tool (1 … 9, then 0 for the 10th) ---
+    // --- digits select the nth toolbar tool 1 to 9, then 0 for the 10th ---
     if (!e.shiftKey && /^[0-9]$/.test(e.key)) {
       const idx = e.key === '0' ? 9 : Number(e.key) - 1;
       const id = this.ui.toolOrder?.[idx];
@@ -439,9 +457,9 @@ class App {
     const ratio = img && img.naturalWidth ? img.naturalHeight / img.naturalWidth : 0.6;
     const w = Math.min(maxW, img?.naturalWidth ? img.naturalWidth / 2 : maxW);
     const h = w * ratio;
-    // On an empty page the picture goes to the page's top-left corner (the same
-    // place the page itself is framed from); on a page that already has content
-    // it lands where the user is looking.
+    // On an empty page the picture goes to the page's top-left corner, the
+    // same place the page itself is framed from; on a page that already has
+    // content it lands where the user is looking.
     const margin = 12 / ed.camera.zoom;
     const empty = ed.page.elements.length === 0;
     const start = ed.pageStart();
@@ -502,7 +520,7 @@ class App {
   /**
    * The "从本地文件选择" branch: a real OS file dialog.
    *
-   * When the browser can hand out a file handle (Chrome/Edge) the pick is
+   * When the browser can hand out a file handle, which Chrome and Edge can, the pick is
    * remembered as a link to that location, so it can be reopened later without
    * asking again — and without ever copying the file.
    */
@@ -621,15 +639,17 @@ class App {
   /**
    * Open a file the user picked from their own disk.
    *
-   * Nothing is copied: a `.note` is read straight from the file (the document
-   * keeps the archive reader and pulls images from it as they are drawn), and
+   * Nothing is copied: a `.note` is read straight from the file, the document
+   * keeps the archive reader and pulls images from it as they are drawn, and
    * the location is remembered through `handleId` so the recent list can open
    * the very same file again.
    */
   async openLocalFile(file, { handleId = null, handle = null } = {}) {
     const name = file.name.toLowerCase();
-    if (!(await this.confirmDiscard('打开其他文件'))) return;
     if (name.endsWith('.note') || name.endsWith('.whiteboard')) {
+      // A board opens in its own tab. Only the empty board the window starts
+      // with is reused, so the user never loses work they were looking at.
+      if (!this.workspace.slotForNewFile()) await this.newTab(file.name.replace(/\.(note|whiteboard)$/i, ''));
       const ui = this.ui;
       const ed = this.editor;
       try {
@@ -675,9 +695,17 @@ class App {
   /** Shared tail of "a document has been opened": title, status, recent list. */
   #afterOpen(doc, recent, { silent = false } = {}) {
     const ui = this.ui;
+    const tab = this.workspace?.active;
+    if (tab) {
+      tab.doc = doc;
+      tab.dirty = false;
+      tab.pristine = false;
+      tab.view = null;
+    }
     ui.titleInput.value = doc.name;
     this.markSaved();
     ui.syncStatus();
+    this.syncWorkspace();
     ui.pagesPanel.classList.add('hidden');
     ui.progress('');
     if (recent) rememberFile(recent);
@@ -697,7 +725,7 @@ class App {
    *
    * @param {File} file
    * @param {{handleId?: string}} opts identifies the picked file's location so
-   *   the recent list can ask for it again (nothing is copied).
+   *   the recent list can ask for it again, nothing is copied.
    */
   async importPdfFile(file, { handleId = null } = {}) {
     const ui = this.ui;
@@ -726,8 +754,8 @@ class App {
       this.markModified();
       ui.syncStatus();
       ui.progress('');
-      // Remember *where* the PDF came from (a file handle when the browser
-      // supports them) instead of keeping a second copy of it.
+      // Remember *where* the PDF came from, a file handle when the browser
+      // supports them, instead of keeping a second copy of it.
       rememberFile({
         name: file.name,
         kind: 'pdf',
@@ -748,17 +776,17 @@ class App {
    * Save / export
    * ---------------------------------------------------------------- */
   /**
-   * Write the open board back to its file (Ctrl+S).
+   * Write the open board back to its file, Ctrl+S.
    *
-   * The file is the one the user picked: a writable handle means we overwrite
-   * it in place.  A board that only exists as a read-only snapshot (dragged in,
-   * or a browser without the File System Access API) has nowhere to go, so the
-   * user is asked for a location instead — never silently, and never on the
-   * idle auto-save timer.
+   * The file is the one the user picked: a writable handle means we
+   * overwrite it in place.  A board that only exists as a read-only snapshot,
+   * because it was dragged in or because the browser has no File System
+   * Access API, has nowhere to go, so the user is asked for a location
+   * instead — never silently, and never on the idle auto-save timer.
    *
    * @param {{auto?: boolean, keepEditing?: boolean}} opts
    *   `auto` tags the toast as an automatic save; `keepEditing` leaves the
-   *   inline text editor open (auto-save must not pull it away).
+   *   inline text editor open, auto-save must not pull it away.
    */
   async save({ auto = false, keepEditing = false } = {}) {
     const doc = this.editor.doc;
@@ -773,8 +801,8 @@ class App {
   }
 
   /**
-   * Write the board into `handle` (Ctrl+S on a picked file, or the location
-   * chosen in 另存为 — both are the same operation).
+   * Write the board into `handle`, which is Ctrl+S on a picked file or the
+   * location chosen in 另存为, both being the same operation.
    */
   async #writeToHandle(handle, { auto = false, keepEditing = false, adopt = false } = {}) {
     const ed = this.editor;
@@ -792,7 +820,7 @@ class App {
       const out = await writeNoteToHandle(doc, handle, { newFiles });
       // This handle now *is* the board: Ctrl+S, autosave and compaction keep
       // using it, and the archive snapshot is refreshed because the file on
-      // disk just changed (a stale reader would resurrect dropped entries).
+      // disk just changed, a stale reader would resurrect dropped entries.
       doc.fileHandle = handle;
       try {
         const fresh = await ZipReader.open(await handle.getFile());
@@ -822,7 +850,7 @@ class App {
     } finally {
       this.saving = false;
       // Edits can land while the file is being written, and those were recorded
-      // without re-arming anything (a write was in flight).  Settle the next
+      // without re-arming anything, a write was in flight.  Settle the next
       // countdown here: a full idle window if the board is dirty again, and
       // nothing at all when the file on disk is up to date.
       this.autoSaveDeadline = null;
@@ -890,8 +918,8 @@ class App {
   /**
    * Rewrite the saved `.note` without the resources no page refers to.
    *
-   * The archive is read and rewritten in this page (see zipread.js /
-   * zipwrite.js): untouched entries are copied byte for byte and streamed
+   * The archive is read and rewritten in this page by zipread.js and
+   * zipwrite.js: untouched entries are copied byte for byte and streamed
    * straight back into the same file, so a 300 MB board is never held in
    * memory.  The user sees exactly what would be dropped before anything is
    * written.
@@ -968,7 +996,7 @@ class App {
 
   /**
    * What a compaction of the open board would drop, computed from the archive
-   * the board was read from (its entry list and compressed sizes) and the
+   * the board was read from, its entry list and compressed sizes, and the
    * resources the pages still reference.
    */
   #planLocalCompaction() {
@@ -1024,20 +1052,100 @@ class App {
     }
   }
 
-  async newDocument() {
-    if (!(await this.confirmDiscard('新建白板'))) return;
+  /* ---------------------------------------------------------------- *
+   * Open documents
+   * ---------------------------------------------------------------- */
+
+  /** New blank board in a new tab. Nothing is discarded. */
+  async newTab(name = '未命名白板') {
     const ed = this.editor;
-    ed.pdf.close();
-    ed.resources.setNote();
-    ed.resources.clear();
     const doc = createDocument();
-    ed.setDocument(doc);
+    doc.name = name;
+    ed.pdf.close();
+    const tab = this.workspace.add(doc);
     this.ui.titleInput.value = doc.name;
     this.markSaved();
-    this.ui.syncStatus();
+    this.syncWorkspace();
+    tab.pristine = false;
+    return tab;
   }
 
-  /* ---- rendering a page to a bitmap (PNG export / PDF export) ---- */
+  /** Show a tab. The board that is leaving records its own view first. */
+  activateTab(id) {
+    if (this.workspace.activeId === id) return;
+    this.workspace.activate(id);
+    const tab = this.workspace.active;
+    if (tab) {
+      this.ui.titleInput.value = tab.name;
+      this.modified = tab.dirty;
+      this.ui.setSaveState(tab.dirty ? '未保存的更改' : '');
+      this.#restorePdf(tab);
+    }
+    this.ui.closeFlyout();
+    this.ui.syncStatus();
+    this.syncWorkspace();
+  }
+
+  /** Reactivate the PDF layer of the board that was just switched to. */
+  #restorePdf(tab) {
+    const ed = this.editor;
+    ed.pdf.close().finally(() => {
+      const bytes = tab.doc._pdfBytes;
+      if (!bytes) return;
+      ed.pdf.open(bytes, 'board:' + tab.id).then(() => ed.invalidate()).catch(() => {});
+    });
+  }
+
+  /** Close a tab, asking first when it holds unsaved work. */
+  async closeTab(id) {
+    const tab = this.workspace.list().find((t) => t.id === id);
+    if (!tab) return;
+    if (tab.dirty) {
+      this.workspace.activeId = id;
+      const ok = await this.confirmDiscard('关闭这个白板');
+      if (!ok) { this.workspace.activate(id); return; }
+    }
+    const wasActive = this.workspace.activeId === id;
+    this.workspace.close(id);
+    if (this.workspace.count === 0) {
+      await this.newTab();
+      return;
+    }
+    if (wasActive) {
+      const active = this.workspace.active;
+      this.ui.titleInput.value = active.name;
+      this.modified = active.dirty;
+      this.#restorePdf(active);
+    }
+    this.ui.syncStatus();
+    this.syncWorkspace();
+  }
+
+  closeActiveTab() { return this.closeTab(this.workspace.activeId); }
+
+  /** Repaint the tab strip and the window title from the workspace. */
+  syncWorkspace() {
+    const tab = this.workspace?.active;
+    this.ui.syncTabs();
+    if (tab) {
+      this.ui.titleInput.value = tab.name;
+      this.ui.saveState.textContent = tab.dirty ? '未保存的更改' : '';
+      document.title = `${tab.dirty ? '● ' : ''}${tab.name} — WhiteSoft`;
+    }
+  }
+
+  /** The board that is on screen, kept in sync whenever an edit lands. */
+  #touchTab() {
+    const tab = this.workspace?.active;
+    if (!tab) return;
+    if (!tab.dirty) { tab.dirty = true; this.ui.syncTabs(); }
+  }
+
+  async newDocument() {
+    return this.newTab();
+  }
+
+  /* ---- rendering a page to a bitmap for PNG and PDF export ---- */
   async renderPageBitmap(index, scale = 2) {
     const ed = this.editor;
     const page = ed.doc.pages[index];
@@ -1351,7 +1459,7 @@ function elementBoundsSafe(e) {
   return new Rect(minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2);
 }
 
-/** Minimal image-only PDF writer (one JPEG per page). */
+/** Minimal image-only PDF writer, one JPEG per page. */
 function buildPdf(pages) {
   const enc = new TextEncoder();
   const chunks = [];

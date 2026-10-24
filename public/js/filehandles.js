@@ -2,10 +2,10 @@
  * Remembering where a local file lives.
  *
  * A browser never reveals the path of a file the user picked, and it cannot
- * re-open one on its own.  The File System Access API (Chrome/Edge) hands out
+ * re-open one on its own.  The File System Access API, Chrome and Edge, hands out
  * a `FileSystemFileHandle` instead, which *is* a durable link to that location:
- * storing it lets the recent list reopen the very same file later (asking for
- * permission once) without copying anything anywhere.
+ * storing it lets the recent list reopen the very same file later, asking
+ * for permission once, without copying anything anywhere.
  *
  * Handles are structured-cloneable, so IndexedDB is the only place they can be
  * kept.  When the API is missing the helpers degrade to no-ops and the recent
@@ -56,7 +56,7 @@ function tx(mode, fn) {
   }));
 }
 
-/** Store a handle under `id`; returns the id (or null when unsupported). */
+/** Store a handle under `id`; returns the id, or null when unsupported. */
 export async function saveHandle(id, handle) {
   if (!handlesSupported() || !handle) return null;
   try {
@@ -67,7 +67,7 @@ export async function saveHandle(id, handle) {
   }
 }
 
-/** Fetch a stored handle (null when it is gone or the API is missing). */
+/** Fetch a stored handle, null when it is gone or the API is missing. */
 export async function loadHandle(id) {
   if (!handlesSupported() || !id) return null;
   try {
@@ -83,13 +83,13 @@ export async function forgetHandle(id) {
   try { await tx('readwrite', (store) => store.delete(id)); } catch { /* ignore */ }
 }
 
-/** Forget every stored handle (used by 清空记录). */
+/** Forget every stored handle, used by 清空记录. */
 export async function forgetAllHandles() {
   try { await tx('readwrite', (store) => store.clear()); } catch { /* ignore */ }
 }
 
 /**
- * Make sure we may read (and optionally write) a stored handle.
+ * Make sure we may read, and optionally write, a stored handle.
  * Permission prompts need a user gesture, which a click on the recent list is.
  */
 export async function ensurePermission(handle, mode = 'read') {

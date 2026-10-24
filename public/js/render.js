@@ -1,7 +1,7 @@
 /**
  * Canvas renderer.
  *
- * Draws one whiteboard "page" (a PDF backdrop plus every element) into a
+ * Draws one whiteboard "page", a PDF backdrop plus every element, into a
  * 2-D canvas.  A world-space cache keeps panning and live inking smooth even
  * on pages that carry thousands of pen strokes.
  */
@@ -10,6 +10,7 @@ import { argbToRgba, clamp } from './util.js';
 import {
   T, POLYGON_SHAPES, IS_OBJECT, elementPoints, localBounds, gradientById,
   fontString, wrapText, LINE_HEIGHT, ellipsePointsFromRect, stickyCornerRadius,
+  elementBounds,
 } from './elements.js';
 import { layoutRichText, drawRichLine } from './mathtext.js';
 
@@ -17,9 +18,10 @@ const HIGHLIGHTER_MIN_WIDTH = 6;
 
 /**
  * Rendering options that are not part of the file format.
- * `roundStraightHighlights` also rounds the ends of highlights that were drawn
- * as a straight line in an existing .note (a two-point, or fully collinear,
- * highlighter stroke), which is how the sample boards were annotated.
+ * `roundStraightHighlights` also rounds the ends of highlights that were
+ * drawn as a straight line in an existing .note, that is a two-point or
+ * fully collinear highlighter stroke, which is how the sample boards
+ * were annotated.
  */
 export const renderOptions = { roundStraightHighlights: true };
 
@@ -38,7 +40,7 @@ function isStraightStroke(pts) {
   return true;
 }
 
-/** Should this highlighter be drawn as a stadium (band + two semicircles)? */
+/** Should this highlighter be drawn as a stadium, band + two semicircles? */
 function highlighterIsRounded(e, pts) {
   if (e.cap === 'round') return true;
   if (e.cap === 'butt') return false;
@@ -349,7 +351,7 @@ function roundRectPath(ctx, x, y, w, h, r) {
 function drawSticky(ctx, e, env) {
   const b = Rect.parse(e.bounds);
   // Rounded corners: the radius is a ratio of the shorter side, so a note
-  // keeps its shape when it is resized (see stickyCornerRadius in elements.js).
+  // keeps its shape when it is resized, see stickyCornerRadius in elements.js.
   const r = stickyCornerRadius(e, b.w, b.h);
   const shape = new Path2D();
   roundRectPath(shape, b.x, b.y, b.w, b.h, r);
@@ -374,8 +376,8 @@ function drawSticky(ctx, e, env) {
 
   const pad = Math.min(10, b.w * 0.08);
   const size = e.fontSize || 18;
-  // The sticky keeps its paper while it is edited (the textarea is
-  // transparent), but its text belongs to the DOM editor then.
+  // The sticky keeps its paper while it is edited, since the textarea is
+  // transparent, but its text belongs to the DOM editor then.
   if (env?.editing === e) return;
   ctx.fillStyle = argbToRgba(e.textColor || '#FF000000');
   ctx.font = fontString(size, e);
@@ -393,7 +395,7 @@ function drawSticky(ctx, e, env) {
 function drawTextObject(ctx, e, env) {
   // While this element is open in the DOM inline editor, the textarea is the
   // only thing that may draw its text: painting it here as well shows a
-  // slightly offset second copy (ghosting), because DOM and canvas text are
+  // slightly offset second copy, ghosting, because DOM and canvas text are
   // rasterised differently and the box only re-fits when the editor closes.
   if (env?.editing === e) return;
   const b = Rect.parse(e.bounds);
@@ -614,14 +616,57 @@ export class SceneRenderer {
     this.lastStats = { ms: 0, rebuildMs: 0, rebuilt: false };
     /** WeakMap<element, {sig: string, path: Path2D, kind: string}> */
     this.pathCache = new WeakMap();
+    /**
+     * Parts of the cached raster that changed, in world units.
+     *
+     * A single committed stroke only touches a small area, so redrawing the
+     * whole page for it is wasted work that grows with the number of elements.
+     * Those changes are collected here and patched back in place. Anything that
+     * cannot be expressed as a box falls back to `invalidate`, which throws
+     * this away and rebuilds the raster from scratch.
+     */
+    this.dirty = [];
   }
 
   /** Hard invalidation: the content changed, rebuild before the next paint. */
-  invalidate() { this.cacheValid = false; }
+  invalidate() {
+    this.cacheValid = false;
+    this.dirty.length = 0;
+  }
 
   /**
-   * Soft invalidation: something the cache embeds changed (a sharper PDF
-   * bitmap arrived) but the cached raster is still usable.  The rebuild is
+   * Only this part of the raster changed.
+   *
+   * Merged with any earlier region and patched into the cached raster on the
+   * next paint. Callers that move or reshape elements must pass the union of
+   * the old and the new box. Anything global, such as a new page, a new
+   * background or a reordered element list, must use `invalidate` instead.
+   */
+  invalidateRegion(rect) {
+    if (!rect || !(rect.w > 0) || !(rect.h > 0)) { this.invalidate(); return; }
+    this.dirty.push(rect);
+    // A pile of regions costs more to merge and patch than one clean rebuild.
+    if (this.dirty.length > 24) this.invalidate();
+  }
+
+  /** The merged dirty region, or null when there is nothing to patch. */
+  #dirtyRect() {
+    if (!this.dirty.length) return null;
+    const first = this.dirty[0];
+    let r = first.clone ? first.clone() : new Rect(first.x, first.y, first.w, first.h);
+    for (const d of this.dirty.slice(1)) {
+      const left = Math.min(r.x, d.x);
+      const top = Math.min(r.y, d.y);
+      const right = Math.max(r.right, d.right);
+      const bottom = Math.max(r.bottom, d.bottom);
+      r = new Rect(left, top, right - left, bottom - top);
+    }
+    return r;
+  }
+
+  /**
+   * Soft invalidation: something the cache embeds changed, such as a sharper
+   * PDF bitmap arriving, but the cached raster is still usable. The rebuild is
    * postponed until the user stops interacting.
    */
   markStale() { this.needsRebuild = true; }
@@ -634,7 +679,7 @@ export class SceneRenderer {
    *   images      Map<fileName, drawable>
    *   pdfPages    [{pageNumber, bounds, bitmap}]
    *   background  page background pattern
-   *   live        element currently being drawn (drawn on top, not cached)
+   *   live        element currently being drawn, drawn on top, not cached
    *   overlay     callback(ctx, env) executed in world space after the scene
    *   version     bumps whenever page content changes
    *   interacting true while a drag/zoom gesture is in flight
@@ -687,8 +732,8 @@ export class SceneRenderer {
     // 2. live layer + overlays in world space
     ctx.setTransform(k, 0, 0, k, -camera.x * k, -camera.y * k);
     const env = { images: s.images, zoom: camera.zoom, dpr, scale: k, editing: s.editing || null };
-    // The live layer is normally one element, but a shape can be a group (the
-    // two branches of a hyperbola), so accept both.
+    // The live layer is normally one element, but a shape can be a group of
+    // the two branches of a hyperbola, so accept both.
     if (Array.isArray(s.live)) { for (const e of s.live) drawElement(ctx, e, env); }
     else if (s.live) drawElement(ctx, s.live, env);
     if (s.overlay) { ctx.save(); s.overlay(ctx, env); ctx.restore(); }
@@ -717,7 +762,8 @@ export class SceneRenderer {
       viewWorld.h * (1 + margin * 2),
     );
     const scale = SceneRenderer.snapScale(k);
-    const sameContent = this.cacheValid && this.cachePage === s.page && this.cacheVersion === s.version;
+    const samePage = this.cacheValid && this.cachePage === s.page;
+    const sameContent = samePage && this.cacheVersion === s.version;
     const covers = this.cacheRect.containsRect(viewWorld);
     const needs =
       !sameContent ||
@@ -727,12 +773,57 @@ export class SceneRenderer {
 
     if (!needs) return false;
 
-    // While a gesture is running, keep blitting the existing raster (it is
-    // merely rescaled) and rebuild once the user stops.
-    if (s.interacting && sameContent && covers && this.cacheValid) {
+    // While a gesture is running, keep blitting the existing raster, merely
+    // rescaled, and rebuild once the user stops. A pending dirty region is not
+    // deferred: patching it is cheap and it has to land on the frame the stroke
+    // is committed on, so the guard only covers a cache with nothing to patch.
+    const canPatch = samePage && covers && this.dirty.length && this.cacheValid
+      && Math.abs(this.cacheScale - scale) <= 1e-6;
+    if (s.interacting && covers && this.cacheValid && !this.needsRebuild
+      && !canPatch && Math.abs(this.cacheScale - scale) <= 1e-6) {
       this.needsRebuild = true;
       return false;
     }
+
+    // A small change to the same page is patched in place instead of redrawing
+    // every element. The dirty box is grown a little so a stroke that merely
+    // crosses its boundary is not cut off, then everything that touches the box
+    // is drawn again, in page order.
+    const patch = canPatch ? this.#dirtyRect() : null;
+    if (patch) {
+      // The box that is cleared, clipped and redrawn is one and the same, so
+      // every element that reaches into it is drawn completely. Clearing one
+      // box and clipping to another leaves an antialiased seam at the edge.
+      const pad = 12 / Math.max(0.01, s.camera.zoom) + 24;
+      const area = new Rect(patch.x - pad, patch.y - pad, patch.w + pad * 2, patch.h + pad * 2);
+      const t0 = performance.now();
+      const c = this.cacheCtx;
+      const k2 = this.cacheScaleUsed;
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      const cx = (area.x - this.cacheRect.x) * k2;
+      const cy = (area.y - this.cacheRect.y) * k2;
+      c.clearRect(cx, cy, area.w * k2, area.h * k2);
+      c.beginPath();
+      c.rect(cx, cy, area.w * k2, area.h * k2);
+      c.clip();
+      c.setTransform(k2, 0, 0, k2, -this.cacheRect.x * k2, -this.cacheRect.y * k2);
+      const env = {
+        images: s.images, zoom: s.camera.zoom, dpr, pathCache: this.pathCache,
+        scale: this.cacheScaleUsed, editing: s.editing || null,
+      };
+      for (const e of s.page.elements) {
+        if (elementBounds(e).intersects(area)) drawElement(c, e, env);
+      }
+      c.restore();
+      this.dirty.length = 0;
+      this.cacheVersion = s.version;
+      this.lastStats.rebuildMs = performance.now() - t0;
+      this.lastStats.patched = true;
+      return true;
+    }
+    this.dirty.length = 0;
+    this.lastStats.patched = false;
 
     // Keep the raster inside a sane memory budget.  16 MP is enough for a
     // crisp cache on a 2x display while staying well under browser limits.

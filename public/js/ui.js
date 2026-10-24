@@ -2,10 +2,10 @@
  * User interface.
  *
  * Layout follows Microsoft Whiteboard for Windows: a slim title bar, an
- * infinite canvas, a floating toolbar (bottom-centre by default, and movable to
- * any edge like the local app's "toolbar location" setting), and a status strip
- * whose right-hand side carries the zoom control and the page navigator with
- * its page-number box.
+ * infinite canvas, a floating toolbar that sits bottom-centre by default and
+ * can move to any edge like the local app's "toolbar location" setting, and a
+ * status strip whose right-hand side carries the zoom control and the page
+ * navigator with its page-number box.
  */
 import { el, $, $$, argbToHex, hexToArgb, argbAlpha, formatBytes, clamp, argbToRgba } from './util.js';
 import { SceneRenderer, renderOptions } from './render.js';
@@ -99,28 +99,38 @@ export class UI {
     const app = this.app;
     const root = $('#wb-app');
 
-    /* ---- title bar ---- */
+    /* ---- menu bar ---- */
     this.titleInput = el('input', {
       class: 'wb-title', value: app.editor.doc.name, spellcheck: 'false',
-      onchange: (e) => { app.editor.doc.name = e.target.value || '未命名白板'; },
+      onchange: (e) => { app.editor.doc.name = e.target.value || '未命名白板'; app.workspace?.touch(); },
     });
     this.saveState = el('span', { class: 'wb-savestate', text: '' });
 
-    const titlebar = el('header', { class: 'wb-titlebar' },
+    const menuBtn = (label, items) => el('button', {
+      class: 'wb-menu-btn', type: 'button', text: label,
+      onclick: (e) => this.openMenu(e.currentTarget, items()),
+    });
+
+    this.menubar = el('header', { class: 'wb-menubar' },
       el('div', { class: 'wb-brand' },
-        el('span', { class: 'wb-logo', html: svg('<path d="M3 4h18v13H3z"/><path d="M7 21l3-4M17 21l-3-4"/>', 22) }),
+        el('span', { class: 'wb-logo', html: svg('<path d="M3 4h18v13H3z"/><path d="M7 21l3-4M17 21l-3-4"/>', 20) }),
         el('span', { class: 'wb-brandname', text: 'WhiteSoft' }),
       ),
-      el('div', { class: 'wb-titlewrap' }, this.titleInput, this.saveState),
-      el('div', { class: 'wb-titleactions' },
-        btn('open', '打开 .note 白板文件 · Ctrl+O', () => app.showOpenDialog()),
-        btn('save', '保存 .note · Ctrl+S — 覆盖当前文件', () => app.save()),
-        btn('copy', '另存为新的 .note 文件 · Ctrl+Shift+S', () => app.saveAs()),
-        btn('export', '导出 · PNG / PDF / Zip', () => this.openExportDialog()),
-        btn('pdf', '导入 PDF · Ctrl+Shift+I', () => app.pickPdf()),
+      menuBtn('文件', () => this.fileMenu()),
+      menuBtn('编辑', () => this.editMenu()),
+      menuBtn('视图', () => this.viewMenu()),
+      menuBtn('插入', () => this.insertMenu()),
+      el('div', { class: 'wb-menubar-spacer' }),
+      el('div', { class: 'wb-menubar-actions' }, this.titleInput, this.saveState),
+      el('div', { class: 'wb-sep' }),
+      el('div', { class: 'wb-group' },
+        btn('settings', '设置', (e) => this.openSettingsFlyout(e.currentTarget)),
         btn('help', '键盘快捷键 · F1', () => this.showShortcuts()),
       ),
     );
+
+    /* ---- document tabs ---- */
+    this.tabstrip = el('div', { class: 'wb-tabstrip' });
 
     /* ---- toolbar ---- */
     this.toolButtons = {};
@@ -160,8 +170,9 @@ export class UI {
     this.selbarBtn = btn('select', '显示 / 隐藏所选操作栏', () => this.showSelectionBar());
 
     this.moreBtn = btn('more', '更多', (e) => this.openMoreFlyout(e.currentTarget));
-    this.settingsBtn = btn('settings', '设置', (e) => this.openSettingsFlyout(e.currentTarget));
 
+    // File and view commands live in the menu bar so the strip at the bottom
+    // stays the drawing toolbar. Only drawing and object actions stay here.
     this.toolbar = el('div', { class: 'wb-toolbar loc-bottom' },
       el('div', { class: 'wb-group' }, this.undoBtn, this.redoBtn),
       el('div', { class: 'wb-sep' }),
@@ -173,8 +184,6 @@ export class UI {
         btn('table', '插入表格 · B', () => { this.editor.setTool('table'); this.syncTools(); }),
         btn('image', '插入图片 · Ctrl+V 粘贴', () => this.app.pickImage()),
         btn('background', '画布背景', (e) => this.openBackgroundFlyout(e.currentTarget)),
-        btn('pages', '页面面板 · Ctrl+Shift+P', () => this.togglePages()),
-        this.settingsBtn,
       ),
     );
 
@@ -204,7 +213,7 @@ export class UI {
       btn('fullscreen', '全屏 · F11', () => this.app.toggleFullscreen(), 'sm'),
     );
 
-    /* ---- page navigation (bottom-right corner) ---- */
+    /* ---- page navigation, bottom-right corner, ---- */
     this.pageInput = el('input', {
       class: 'wb-pageinput', type: 'text', inputmode: 'numeric', value: '1',
       title: '输入页码后回车跳转到该画纸',
@@ -242,7 +251,8 @@ export class UI {
     this.statusRight = el('div', { class: 'wb-status-right', text: '' });
 
     root.append(
-      titlebar,
+      this.menubar,
+      this.tabstrip,
       el('div', { class: 'wb-stage' },
         this.canvasWrap,
         this.pagesPanel,
@@ -423,6 +433,160 @@ export class UI {
     if (show) { this.invalidateThumbs(); this._pagesSig = null; this.syncPages(); }
   }
 
+  /* ---------------------------------------------------------------- *
+   * Menu bar
+   * ---------------------------------------------------------------- */
+
+  /** One entry of a dropdown. */
+  #menuItem({ label, key = '', run, disabled = false }) {
+    return el('button', {
+      class: 'wb-menu-item', type: 'button', disabled,
+      onclick: () => { this.closeMenus(); if (run) run(); },
+    },
+      el('span', { text: label }),
+      key ? el('span', { class: 'wb-menu-key', text: key }) : null,
+    );
+  }
+
+  #menuSep() { return el('div', { class: 'wb-menu-sep' }); }
+
+  /** Show `items` under `anchor`. Opening a menu closes the previous one. */
+  openMenu(anchor, items, { align = 'left' } = {}) {
+    const already = this.menu && this.menuAnchor === anchor;
+    this.closeMenus();
+    if (already) return;
+    const box = el('div', { class: 'wb-menu' }, items.filter(Boolean));
+    document.body.append(box);
+    const r = anchor.getBoundingClientRect();
+    const w = box.offsetWidth;
+    const left = align === 'right' ? r.right - w : r.left;
+    box.style.left = `${clamp(left, 6, window.innerWidth - w - 6)}px`;
+    box.style.top = `${Math.round(r.bottom + 4)}px`;
+    this.menu = box;
+    this.menuAnchor = anchor;
+    anchor.classList.add('open');
+    if (!this._menuGlobal) {
+      this._menuGlobal = true;
+      window.addEventListener('pointerdown', (e) => {
+        if (!this.menu) return;
+        if (this.menu.contains(e.target) || this.menuAnchor?.contains(e.target)) return;
+        this.closeMenus();
+      }, true);
+      window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && this.menu) { e.stopPropagation(); this.closeMenus(); }
+      }, true);
+      window.addEventListener('resize', () => this.closeMenus());
+    }
+  }
+
+  closeMenus() {
+    this.menu?.remove();
+    this.menu = null;
+    this.menuAnchor?.classList.remove('open');
+    this.menuAnchor = null;
+  }
+
+  fileMenu() {
+    const app = this.app;
+    return [
+      this.#menuItem({ label: '新建白板', key: 'Ctrl+T', run: () => app.newTab() }),
+      this.#menuItem({ label: '打开 .note 白板…', key: 'Ctrl+O', run: () => app.showOpenDialog() }),
+      this.#menuItem({ label: '最近使用的文件', run: () => app.showRecentDialog() }),
+      this.#menuSep(),
+      this.#menuItem({ label: '保存', key: 'Ctrl+S', run: () => app.save() }),
+      this.#menuItem({ label: '另存为…', key: 'Ctrl+Shift+S', run: () => app.saveAs() }),
+      this.#menuSep(),
+      this.#menuItem({ label: '导入 PDF…', key: 'Ctrl+Shift+I', run: () => app.pickPdf() }),
+      this.#menuItem({ label: '插入图片…', run: () => app.pickImage() }),
+      this.#menuItem({ label: '导出…', run: () => this.openExportDialog() }),
+      this.#menuItem({ label: '一键压缩 .note', run: () => app.compactCurrentNote() }),
+      this.#menuSep(),
+      this.#menuItem({ label: '关闭当前标签', key: 'Ctrl+W', run: () => app.closeActiveTab() }),
+    ];
+  }
+
+  editMenu() {
+    const app = this.app;
+    const ed = this.editor;
+    return [
+      this.#menuItem({ label: '撤销', key: 'Ctrl+Z', disabled: !ed.history.canUndo, run: () => app.undo() }),
+      this.#menuItem({ label: '重做', key: 'Ctrl+Y', disabled: !ed.history.canRedo, run: () => app.redo() }),
+      this.#menuSep(),
+      this.#menuItem({ label: '复制', key: 'Ctrl+C', run: () => { ed.copySelection(false); this.toast('已复制'); } }),
+      this.#menuItem({ label: '剪切', key: 'Ctrl+X', run: () => ed.copySelection(true) }),
+      this.#menuItem({ label: '再制', key: 'Ctrl+D', run: () => ed.duplicateSelection() }),
+      this.#menuItem({ label: '删除所选', key: 'Delete', run: () => app.deleteSelection() }),
+      this.#menuItem({ label: '全选', key: 'Ctrl+A', run: () => ed.selectAll() }),
+      this.#menuSep(),
+      this.#menuItem({ label: '墨迹转形状', key: 'Alt+B', run: () => app.beautify() }),
+      this.#menuItem({ label: '置于顶层', key: 'Ctrl+Shift+]', run: () => ed.reorderSelection('front') }),
+      this.#menuItem({ label: '置于底层', key: 'Ctrl+Shift+[', run: () => ed.reorderSelection('back') }),
+    ];
+  }
+
+  viewMenu() {
+    const ed = this.editor;
+    return [
+      this.#menuItem({ label: '适应页面宽度', key: 'Ctrl+0', run: () => ed.fitPageWidth() }),
+      this.#menuItem({ label: '显示整页', key: 'Ctrl+Shift+0', run: () => ed.fitPage() }),
+      this.#menuItem({ label: '放大', key: 'Ctrl++', run: () => ed.zoomBy(1.25) }),
+      this.#menuItem({ label: '缩小', key: 'Ctrl+−', run: () => ed.zoomBy(1 / 1.25) }),
+      this.#menuSep(),
+      this.#menuItem({ label: '页面面板', key: 'Ctrl+Shift+P', run: () => this.togglePages() }),
+      this.#menuItem({ label: '所选操作栏', run: () => this.showSelectionBar() }),
+      this.#menuItem({ label: '全屏', key: 'F11', run: () => this.app.toggleFullscreen() }),
+      this.#menuSep(),
+      this.#menuItem({ label: '快捷键一览', key: 'F1', run: () => this.showShortcuts() }),
+    ];
+  }
+
+  insertMenu() {
+    const ed = this.editor;
+    const app = this.app;
+    return [
+      this.#menuItem({ label: '文本框', key: 'T', run: () => { ed.setTool('text'); this.syncTools(); } }),
+      this.#menuItem({ label: '便签', key: 'N', run: () => { ed.setTool('sticky'); this.syncTools(); } }),
+      this.#menuItem({ label: '表格', key: 'B', run: () => { ed.setTool('table'); this.syncTools(); } }),
+      this.#menuItem({ label: '反应', run: () => { ed.setTool('reaction'); this.syncTools(); } }),
+      this.#menuSep(),
+      this.#menuItem({ label: '图片…', run: () => app.pickImage() }),
+      this.#menuItem({ label: 'PDF…', key: 'Ctrl+Shift+I', run: () => app.pickPdf() }),
+      this.#menuItem({ label: '新画纸', run: () => ed.addPageAfter() }),
+      this.#menuSep(),
+      this.#menuItem({ label: '画布背景…', run: () => this.openBackgroundFlyout(this.menubar) }),
+    ];
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Document tabs
+   * ---------------------------------------------------------------- */
+
+  /** Repaint the strip from the workspace. */
+  syncTabs() {
+    const ws = this.app?.workspace;
+    if (!ws || !this.tabstrip) return;
+    this.tabstrip.replaceChildren();
+    for (const tab of ws.list()) {
+      const active = tab.id === ws.activeId;
+      const dot = el('span', { class: 'wb-tab-dot' + (tab.dirty ? '' : ' clean') });
+      const close = el('button', {
+        class: 'wb-tab-close', type: 'button', text: '×', title: '关闭标签',
+        onclick: (e) => { e.stopPropagation(); this.app.closeTab(tab.id); },
+      });
+      const node = el('div', {
+        class: 'wb-tab' + (active ? ' active' : ''),
+        title: tab.doc.fileHandle?.name || tab.name,
+        onclick: () => this.app.activateTab(tab.id),
+        onauxclick: (e) => { if (e.button === 1) { e.preventDefault(); this.app.closeTab(tab.id); } },
+      }, dot, el('span', { class: 'wb-tab-name', text: tab.name }), close);
+      this.tabstrip.append(node);
+    }
+    this.tabstrip.append(el('button', {
+      class: 'wb-tab-new', type: 'button', text: '+', title: '新建空白白板 · Ctrl+T',
+      onclick: () => this.app.newTab(),
+    }));
+  }
+
   /**
    * Identity of a page object.
    *
@@ -537,7 +701,7 @@ export class UI {
   /* ---- lazy thumbnail rendering ---- */
   queueThumb(index, canvas) {
     // Keyed by the *page*, not by the row: after a drag-reorder every row still
-    // shows its own page's preview (and no re-render is needed).
+    // shows its own page's preview, and no re-render is needed.
     const key = this.thumbKey(index);
     const cached = this.thumbCache?.get(key);
     if (cached) { canvas.getContext('2d').drawImage(cached, 0, 0, canvas.width, canvas.height); return; }
@@ -598,7 +762,7 @@ export class UI {
     }
     try { await ed.resources.loadForPage(page); } catch { /* ignore */ }
     const renderer = this.#thumbRendererFor(canvas);
-    // The viewport is the thumbnail in *device* pixels (dpr 1 below), not the
+    // The viewport is the thumbnail in *device* pixels, dpr 1 below, not the
     // page's world size: passing the world size made the renderer resize the
     // canvas to e.g. 1152×1636, draw the page into a corner of it, and the CSS
     // then squeezed that whole canvas into 46×60 — a blank-looking preview.
@@ -642,7 +806,7 @@ export class UI {
     }
   }
 
-  /** Re-render one page's preview (drops the snapshot, repaints if on screen). */
+  /** Re-render one page's preview, drops the snapshot, repaints if on screen. */
   invalidateThumb(index) {
     this.thumbCache?.delete(this.thumbKey(index));
     const canvas = this.pagesList?.querySelector(`.wb-thumbcanvas[data-index="${index}"]`);
@@ -703,9 +867,9 @@ export class UI {
    * unfolds underneath it.
    *
    * `onPick` fires for a palette click, `onLive` while the picker is being
-   * dragged (so the canvas can follow along) and `onCommit` when the value
+   * dragged, so the canvas can follow along, and `onCommit` when the value
    * settles — which is where a single undo step belongs.  `onLive`/`onCommit`
-   * default to `onPick` for settings that are not undoable at all (pen colour).
+   * default to `onPick` for settings that are not undoable at all, pen colour.
    */
   colorField({
     label = '颜色', palette = [], current = '#FF000000', cols = 5, alpha = null,
@@ -749,7 +913,7 @@ export class UI {
    * colour of the *current* control — the pen, highlighter or shape palette in
    * a fly-out, or the colour popover of a selection.
    *
-   * The 15 (or 12/6, whichever the control shows) palette colours are a closed,
+   * The palette colours, 15, 12 or 6 depending on the control, are a closed,
    * circular ring, so stepping past either end wraps around.  Gradients are not
    * part of the ring: the gradient pens live in `.wb-gradientgrid`, never in a
    * `.wb-swatches` grid, so they are simply not candidates.
@@ -763,9 +927,10 @@ export class UI {
   cyclePaletteColor(step) {
     const root = this.selectionBar?.popover || this.flyout;
     const buttons = root ? $$('.wb-swatch', root) : [];
-    // Remembered per palette: with nothing active (a custom colour from the
-    // full-spectrum picker) Tab has to start *somewhere*, and it should resume
-    // where the previous Tab left off rather than restarting at the top.
+    // Remembered per palette: with nothing active, as with a custom colour
+    // from the full-spectrum picker, Tab has to start *somewhere*, and it
+    // should resume where the previous Tab left off rather than restarting at
+    // the top.
     if (this.swatchList !== buttons) { this.swatchList = buttons; this.swatchIndex = -1; }
     if (!buttons.length) return false;
     const active = buttons.findIndex((b) => b.classList.contains('active'));
@@ -779,7 +944,7 @@ export class UI {
     // popover — neither belongs to a keyboard step, so the active state is set
     // by hand and the swatch is activated with `.click()`: the palettes attach
     // their handler with addEventListener, so there is no `onclick` *property*
-    // to call (reading it gives null and the colour would never be applied).
+    // to call, reading it gives null and the colour would never be applied.
     buttons.forEach((b) => b.classList.remove('active'));
     target.classList.add('active');
     if (root === this.selectionBar?.popover) {
@@ -802,7 +967,7 @@ export class UI {
     for (const c of colors) {
       const hex = argbToHex(c.argb);
       // The colour a click on this swatch would apply, kept on the button so a
-      // keyboard step (Tab) can apply exactly the same value.
+      // keyboard step, Tab, can apply exactly the same value.
       const picked = alpha === 255 ? c.argb : hexToArgb(hex, alpha);
       const b = el('button', {
         class: 'wb-swatch' + (c.argb && argbToHex(c.argb).toUpperCase() === curHex ? ' active' : ''),
@@ -822,7 +987,7 @@ export class UI {
 
   /**
    * Labelled range slider.  `onInput` fires continuously while dragging;
-   * `onCommit` fires once when the value settles (pointer release / keyboard),
+   * `onCommit` fires once when the value settles, on pointer release or a key,
    * which is where an edit should be written to the undo history.
    */
   slider(label, value, min, max, step, onInput, format = (v) => String(Math.round(v)), onCommit = null) {
@@ -1197,7 +1362,7 @@ export class UI {
     };
 
     // The palette expresses a hue only: each note keeps the transparency it
-    // already had (the same rule the action bar's colour picker uses).  The
+    // already had, the same rule the action bar's colour picker uses.  The
     // spectrum picker is the one place that can change the alpha as well, so it
     // applies live and commits once, like the sliders below.
     const paint = (color, alpha) => {
@@ -1401,7 +1566,7 @@ export class UI {
   }
 
   /* ---------------------------------------------------------------- *
-   * Context menu (right click)
+   * Context menu, right click
    * ---------------------------------------------------------------- */
   closeContextMenu() {
     this.menu?.remove();
@@ -1489,7 +1654,7 @@ export class UI {
 
   /**
    * Show a modal dialog.  Only one is ever on screen: opening a second one
-   * (快捷方式连按两次、从「打开」跳到「最近使用」…) replaces the first instead of
+   * 快捷方式连按两次、从「打开」跳到「最近使用」…， replaces the first instead of
    * stacking modals on top of each other.
    */
   dialog(title, body, { wide = false, actions = [] } = {}) {
@@ -1511,7 +1676,7 @@ export class UI {
     return { close, node: dlg };
   }
 
-  /** Close whatever modal is open (no-op when there is none). */
+  /** Close whatever modal is open, no-op when there is none. */
   closeDialog() {
     this.dialogNode?.remove();
     this.dialogNode = null;

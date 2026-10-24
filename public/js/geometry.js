@@ -88,7 +88,7 @@ export function pointInPolygon(px, py, pts) {
   return inside;
 }
 
-/** Does a polyline cross or sit inside the given rect (marquee test)? */
+/** Does a polyline cross or sit inside the given rect, marquee test? */
 export function polylineIntersectsRect(pts, rect) {
   for (const p of pts) if (rect.containsPoint(p.x, p.y)) return true;
   for (let i = 0; i + 1 < pts.length; i++) {
@@ -114,11 +114,11 @@ export function segmentsIntersect(a, b, c, d) {
 }
 
 /* ------------------------------------------------------------------ *
- * Selection frame helpers (shared by the editor chrome and the tools)
+ * Selection frame helpers, shared by the editor chrome and the tools
  * ------------------------------------------------------------------ */
 
 /**
- * The eight resize handles of a (possibly rotated) rectangle.
+ * The eight resize handles of a, possibly rotated, rectangle.
  * `localRect` is the un-rotated rectangle; handles are placed on it and then
  * rotated about its centre.
  */
@@ -149,7 +149,7 @@ export const OPPOSITE_HANDLE = {
   nw: 'se', n: 's', ne: 'sw', e: 'w', se: 'nw', s: 'n', sw: 'ne', w: 'e',
 };
 
-/** Anchor point (in the un-rotated frame) for a resize drag. */
+/** Anchor point, in the un-rotated frame, for a resize drag. */
 export function handleAnchor(rect, id) {
   const map = {
     nw: { x: rect.right, y: rect.bottom }, n: { x: rect.cx, y: rect.bottom }, ne: { x: rect.left, y: rect.bottom },
@@ -193,7 +193,7 @@ export function rotatePoint(x, y, cx, cy, rad) {
   return { x: cx + dx * c - dy * s, y: cy + dx * s + dy * c };
 }
 
-/** The four corners of a (possibly rotated) rect, clockwise from top-left. */
+/** The four corners of a, possibly rotated, rect, clockwise from top-left. */
 export function rectCorners(rect, rotation = 0) {
   const pts = [
     { x: rect.left, y: rect.top }, { x: rect.right, y: rect.top },
@@ -258,11 +258,11 @@ export function smoothPoints(points, passes = 1) {
  * Least-squares polynomial fit of `ys` against `xs`, highest degree last.
  *
  * Solved through the normal equations with Gaussian elimination and partial
- * pivoting.  Both axes are expected to be normalised by the caller (see
- * `fitParametricCurve`), which is what keeps a degree-9 system well behaved.
+ * pivoting.  Both axes are expected to be normalised by the caller, see
+ * `fitParametricCurve`, which is what keeps a degree-9 system well behaved.
  *
  * @returns {number[]|null} coefficients `[a0, a1, … ad]`, or null when the
- *   system is singular (too few points, or a degenerate stroke)
+ *   system is singular, too few points, or a degenerate stroke
  */
 export function fitPolynomial(xs, ys, degree) {
   const n = degree + 1;
@@ -293,7 +293,7 @@ export function fitPolynomial(xs, ys, degree) {
   return A.map((row) => row[n]);
 }
 
-/** Evaluate `[a0, a1, … ]` at `x` (Horner). */
+/** Evaluate `[a0, a1, … ]` at `x`, Horner. */
 function evalPolynomial(coeffs, x) {
   let out = 0;
   for (let i = coeffs.length - 1; i >= 0; i--) out = out * x + coeffs[i];
@@ -304,14 +304,14 @@ function evalPolynomial(coeffs, x) {
  * Fit a smooth high-degree curve through a freehand stroke.
  *
  * The stroke is fitted **parametrically** — x(t) and y(t) against the arc
- * length — so an arbitrary drawing (vertical parts, loops, a signature) comes
+ * length — so an arbitrary drawing, vertical parts, loops, a signature, comes
  * out as one smooth curve, which a plain y(x) fit could never do.  Points are
  * normalised before fitting and the result is sampled uniformly in t, so the
  * caller gets a tidy polyline it can hand to the renderer.
  *
  * @param {{x: number, y: number}[]} points raw stroke
  * @param {{degree?: number, samples?: number}} opts
- * @returns {{x: number, y: number}[]} fitted samples (empty when unfittable)
+ * @returns {{x: number, y: number}[]} fitted samples, empty when unfittable
  */
 export function fitParametricCurve(points, { degree = 0, samples = 96 } = {}) {
   const pts = (points || []).filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y));

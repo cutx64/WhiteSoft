@@ -10,7 +10,7 @@
  * method and CRC across untouched, so saving a board in place leaves the size
  * of everything the user did not touch exactly as it was.
  *
- * Layout follows the project's server-side writer (server.mjs): UTF-8 names,
+ * Layout follows the project's server-side writer, server.mjs: UTF-8 names,
  * no data descriptors, deflate or store per entry.  Archives above 4 GB are
  * rejected rather than written with truncated fields.
  */
@@ -131,7 +131,7 @@ export class ZipWriter {
     return this.offset;
   }
 
-  /** Discard whatever was written so far (the original file stays intact). */
+  /** Discard whatever was written so far, the original file stays intact. */
   async abort() {
     try { await this.stream.abort?.(); } catch { /* already closed */ }
   }

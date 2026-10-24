@@ -1,16 +1,16 @@
 /**
  * LaTeX support for text boxes and sticky notes.
  *
- * MathJax (vendored in `public/vendor/mathjax/`, no network access) typesets
+ * MathJax typesets, vendored in `public/vendor/mathjax/` with no network access,
  * TeX into an SVG synchronously; we immediately rasterise that SVG and then
  * draw the bitmap like any other image.  Everything therefore flows through
  * the renderer's world-space cache: panning, zooming and page thumbnails never
  * re-typeset anything, and PNG / PDF export picks the math up for free.
  *
- * Supported delimiters (standard TeX inline/display pairs):
+ * Supported delimiters, the standard TeX inline and display pairs:
  *
  *     $x^2$        \(x^2\)        inline
- *     $$x^2$$      \[x^2\]        display (gets its own line)
+ *     $$x^2$$      \[x^2\]        display, gets its own line
  *
  * `\$` is an escaped dollar sign and stays literal text.  A lone `$` that does
  * not hug its content (`$5 and $6`) is also left alone, so ordinary prose is
@@ -20,7 +20,7 @@ import { fontString, LINE_HEIGHT } from './elements.js';
 
 const SCRIPT_URL = new URL('../vendor/mathjax/tex-svg.js', import.meta.url).href;
 
-/** Raster heights (device px) we are willing to keep; snapped to a ladder so
+/** Raster heights, device px, we are willing to keep; snapped to a ladder so
  *  a continuous zoom reuses existing bitmaps instead of re-rasterising. */
 const RASTER_LADDER = [12, 16, 24, 32, 48, 64, 96, 128, 192, 256];
 const MAX_RASTERS = 240;
@@ -35,7 +35,7 @@ export function ensureMathJax() {
   if (mjPromise) return mjPromise;
   mjPromise = new Promise((resolve, reject) => {
     // MathJax reads this global before it boots.  `fontCache: 'local'` makes
-    // every SVG self-contained (its glyph outlines live in its own <defs>),
+    // every SVG self-contained, with its glyph outlines in its own <defs>,
     // which is what lets us rasterise one expression in isolation.
     window.MathJax = {
       startup: { typeset: false }, // we never typeset the page DOM
@@ -133,7 +133,7 @@ const rasters = new Map();
 const rasterizing = new Set();
 let onRaster = null;
 
-/** Called (once per arrival) when a bitmap becomes drawable. */
+/** Called, once per arrival, when a bitmap becomes drawable. */
 export function setRasterHandler(fn) { onRaster = fn; }
 function notifyRaster() { if (onRaster) onRaster(); }
 
@@ -181,7 +181,7 @@ function bucketFor(pxH) {
   return RASTER_LADDER[RASTER_LADDER.length - 1];
 }
 
-/** Bitmap for one expression at (at least) `pxH` device pixels tall. */
+/** Bitmap for one expression at, at least, `pxH` device pixels tall. */
 function raster(key, rec, pxH) {
   const bucket = bucketFor(pxH);
   const rk = key + '@' + bucket;
@@ -215,7 +215,7 @@ function evictRasters() {
  * ------------------------------------------------------------------ */
 const exCache = new Map();
 
-/** x-height (and the font's ascent) of the canvas font at `size`. */
+/** x-height, and the font's ascent, of the canvas font at `size`. */
 function fontMetrics(ctx, size, opts) {
   const key = fontString(size, opts);
   let m = exCache.get(key);
@@ -257,15 +257,15 @@ export function mathAtom(latex, display, ctx, size, opts = {}, pxScale = 1) {
 /**
  * Lay `text` out into lines of text / math items.
  *
- * Wrapping mirrors the plain-text wrapper in elements.js (character based, so
- * CJK breaks anywhere), except that a math atom is indivisible and display
- * math always starts a new line.
+ * Wrapping mirrors the plain-text wrapper in elements.js, which is
+ * character based so CJK breaks anywhere, except that a math atom is
+ * indivisible and display math always starts a new line.
  *
  * @param {CanvasRenderingContext2D} ctx
  * @param {string} text
  * @param {number} size   font size in world units
  * @param {number} maxWidth
- * @param {object} opts   font options (bold / italic)
+ * @param {object} opts   font options, bold and italic
  * @param {number} pxScale world units -> device pixels, for raster sharpness
  * @returns {Array<{items:Array<object>, w:number}>}
  */
@@ -276,7 +276,7 @@ export function layoutRichText(ctx, text, size, maxWidth, opts = {}, pxScale = 1
   let items = [];
   let lineW = 0;
   // Display math closes its own line, which must not also leave an empty
-  // trailing line behind (a plain '\n' still does, like the text wrapper).
+  // trailing line behind, which a plain '\n' still does, like the text wrapper.
   let autoBroken = false;
   const pushLine = () => { lines.push({ items, w: lineW }); items = []; lineW = 0; autoBroken = false; };
 
@@ -307,7 +307,7 @@ export function layoutRichText(ctx, text, size, maxWidth, opts = {}, pxScale = 1
 
 /**
  * Draw one laid-out line.  `y` is the top of the line box and `x` the left
- * edge, matching the plain renderer (which draws with textBaseline = 'top').
+ * edge, matching the plain renderer, which draws with textBaseline = 'top'.
  */
 export function drawRichLine(ctx, line, x, y, size, opts = {}) {
   ctx.font = fontString(size, opts);
@@ -323,10 +323,10 @@ export function drawRichLine(ctx, line, x, y, size, opts = {}) {
     }
     const a = it.atom;
     if (a.img) {
-      // Top of the box sits (height - depth) above the baseline.
+      // Top of the box sits, height - depth, above the baseline.
       ctx.drawImage(a.img, cx, baseline - (a.h - a.depth), a.w, a.h);
     } else {
-      // Placeholder until the bitmap decodes (or when the TeX is broken):
+      // Placeholder until the bitmap decodes, or when the TeX is broken:
       // show the source, clipped to the atom's box.
       ctx.save();
       ctx.beginPath();
@@ -343,7 +343,7 @@ export function drawRichLine(ctx, line, x, y, size, opts = {}) {
   return cx - x;
 }
 
-/** Width of a laid-out line (used for centre / right alignment). */
+/** Width of a laid-out line, used for centre and right alignment. */
 export function lineWidth(line) { return line.w; }
 
 /** Debug / test hook: what has been typeset and rasterised so far. */

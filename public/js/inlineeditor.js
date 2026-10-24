@@ -2,7 +2,7 @@
  * Inline editors.
  *
  * Text, sticky notes and table cells are edited with real DOM nodes layered
- * over the canvas.  Using DOM (rather than drawing a caret on the canvas) is
+ * over the canvas.  Using DOM, rather than drawing a caret on the canvas, is
  * what makes IME composition work for Chinese / Japanese input.
  */
 import { Rect } from './geometry.js';
@@ -36,7 +36,7 @@ export class InlineEditor {
     this.current = target;
     this.before = JSON.parse(JSON.stringify(target));
     // The canvas draws this element's raw source while it is being edited
-    // (instead of typeset math), so the cached raster has to be rebuilt.
+    // instead of typeset math, so the cached raster has to be rebuilt.
     ed.invalidate();
 
     if (target.type === T.TABLE) return this.#editTable(target, opts);
@@ -66,7 +66,7 @@ export class InlineEditor {
     ta.addEventListener('input', () => {
       target.text = ta.value;
       // Typing is a content change like any other: mark the board dirty so the
-      // save state (and the auto-save timer) sees it before the editor closes.
+      // save state, and the auto-save timer, sees it before the editor closes.
       ed.onContentChange?.();
       // Start fetching MathJax as soon as LaTeX shows up, so the formulas are
       // typeset the moment the editor closes.

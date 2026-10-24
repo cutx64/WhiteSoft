@@ -1,11 +1,11 @@
 /**
  * Full-spectrum colour picker.
  *
- * Every place that asks for a colour (pen, highlighter, shape border/fill,
- * text, sticky notes, canvas background, the selection bar) shows the same
- * control: the context's palette plus a picker that unfolds underneath it —
- * a saturation/value square, a hue strip, an optional alpha strip, a hex field
- * and a live preview.
+ * All the places that ask for a colour, namely the pen, highlighter, shape
+ * border/fill, text, sticky notes, canvas background and the selection bar,
+ * show the same control: the context's palette plus a picker that unfolds
+ * underneath it — a saturation/value square, a hue strip, an optional alpha
+ * strip, a hex field and a live preview.
  *
  * Colours travel through the whole application as `#AARRGGBB` strings, which is
  * what `.note` elements store, so this module is the single place where they are
@@ -83,9 +83,10 @@ export function hsvToRgb(h, s, v) {
  *
  * @param {object} opts
  *   `color`       current `#AARRGGBB`
- *   `allowAlpha`  show the transparency strip (off where a separate opacity
- *                 slider already exists, e.g. the pen and highlighter)
- *   `onInput`     live value while dragging (may be omitted)
+ *   `allowAlpha`  show the transparency strip, off where a separate
+ *                 opacity slider already exists, e.g. the pen and
+ *                 highlighter
+ *   `onInput`     live value while dragging, may be omitted
  *   `onCommit`    final value — where one undo step should be written
  * @returns {HTMLElement}
  */
@@ -149,7 +150,7 @@ export function colorPicker({
   area.addEventListener('pointerdown', (ev) => {
     dragging = true;
     // Capture keeps the drag alive outside the square, but it throws when there
-    // is no live pointer (synthetic events, some input devices) — that must not
+    // is no live pointer, synthetic events, some input devices, — that must not
     // take the rest of the gesture down with it.
     try { area.setPointerCapture?.(ev.pointerId); } catch { /* no active pointer */ }
     hsv = { ...hsv, ...fromPointer(ev) };

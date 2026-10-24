@@ -3,7 +3,7 @@
  *
  * Every operation is recorded as a pair of closures, which keeps memory
  * proportional to what actually changed rather than to the whole document
- * (important when a single page can hold several thousand strokes).
+ * important when a single page can hold several thousand strokes.
  */
 import { clone } from './util.js';
 

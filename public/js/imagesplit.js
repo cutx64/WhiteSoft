@@ -22,7 +22,7 @@ import { T, localBounds } from './elements.js';
 /** Largest bitmap stored for one half, per side. */
 const MAX_HALF_PX = 4096;
 
-/** How close to an edge a cut is allowed to land (fractions of the element). */
+/** How close to an edge a cut is allowed to land, fractions of the element. */
 export const MIN_SPLIT_FRACTION = 0.02;
 
 /** Clamp a cut position so neither piece can end up empty. */
@@ -69,10 +69,10 @@ function piecesFor(axis, at) {
 /**
  * Cut `img` in two and put the halves on the page in its place.
  *
- * @param {object} ed   the editor (page, resources, history, selection)
+ * @param {object} ed   the editor, holding page, resources, history and selection
  * @param {object} img  the image element to cut
  * @param {'vertical'|'horizontal'} axis  which way the cut line runs
- * @param {number} [at] where along that axis to cut, 0..1 (default: the middle)
+ * @param {number} [at] where along that axis to cut, 0..1, the middle by default
  * @returns {Promise<{ok: boolean, error?: string, halves?: object[]}>}
  */
 export async function splitImage(ed, img, axis, at = 0.5) {

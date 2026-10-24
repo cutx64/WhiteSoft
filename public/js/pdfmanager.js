@@ -155,7 +155,7 @@ export class PdfManager {
    * Returns a canvas holding `pageNumber` rasterised at approximately
    * `targetWidth` device pixels.  Results are cached per resolution bucket.
    *
-   * A canvas the browser silently refused to paint (too large for the machine)
+   * A canvas the browser silently refused to paint, too large for the machine
    * is retried at half the resolution, so the backdrop may be softer than
    * asked but is never missing.
    */

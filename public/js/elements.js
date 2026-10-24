@@ -3,7 +3,7 @@
  *
  * The numeric type codes and the on-disk shape of every element mirror the
  * Microsoft Whiteboard local `.note` format exactly, so files written by this
- * application can be read back by Whiteboard (and vice-versa) for all the
+ * application can be read back by Whiteboard, and vice-versa, for all the
  * standard element kinds.  Codes in the 4xxxxx range are clone extensions; they
  * are still stored as plain JSON in the same page files.
  */
@@ -86,12 +86,12 @@ export const PALETTE = {
 /**
  * Ink gradients.
  *
- * The first two are the ones Microsoft Whiteboard ships (彩虹 / 极光); the rest
+ * The first two are the ones Microsoft Whiteboard ships, 彩虹 and 极光; the rest
  * are the familiar matplotlib colormaps, sampled at even intervals — enough
  * stops that a stroke reads as the colormap instead of a few bands.
  *
  * `id` is what an element stores in `inkGradient`, so these names travel with
- * the document (Whiteboard ignores the field and paints the stroke solid).
+ * the document, Whiteboard ignores the field and paints the stroke solid.
  */
 export const GRADIENTS = [
   { id: 'rainbow', name: '彩虹', stops: ['#D09734', '#EFB73B', '#E6C245', '#82AE3E', '#3EA03D', '#23A46A', '#2F9794', '#40A3AD'] },
@@ -113,7 +113,7 @@ export const GRADIENTS = [
   { id: 'twilight', name: 'twilight', stops: ['#E2D9E2', '#8A79A8', '#4A4A7A', '#2B2B4F', '#4A2B4F', '#8A4A5A', '#C97A6A', '#E2B0A0'] },
 ];
 
-/** Gradient lookup by id (falls back to the rainbow pen). */
+/** Gradient lookup by id, falls back to the rainbow pen. */
 export function gradientById(id) {
   return GRADIENTS.find((g) => g.id === id) || GRADIENTS[0];
 }
@@ -225,13 +225,38 @@ export function setElementPoints(e, pts) {
 
 /** The un-rotated bounding box of an element, in world units. */
 export function localBounds(e) {
-  if (e.bounds != null) return Rect.parse(e.bounds);
-  const pts = elementPoints(e);
-  const r = rectFromPoints(pts);
-  // Shapes are stored as their outline; grow by half the stroke width so the
-  // visual bounds match the geometry bounds.
-  const pad = (e.width || 0) / 2 + (IS_INK.has(e.type) ? (e.width || 0) / 2 : 0);
-  return pad ? r.expand(pad) : r;
+  // A stroke's box is the extent of every point it holds, so recomputing it is
+  // proportional to the number of points. Culling asks for it once per element
+  // per repaint, which turns that into real work on a page full of ink, so the
+  // answer is memoised against a signature of the geometry it came from. A
+  // shape stores its box as a string and the signature is that string, so an
+  // unchanged shape is not re-parsed either.
+  const sig = boundsSignature(e);
+  if (e._lbSig === sig && e._lbRect) return e._lbRect.clone();
+  let out;
+  if (e.bounds != null) {
+    out = Rect.parse(e.bounds);
+  } else {
+    const pts = elementPoints(e);
+    const r = rectFromPoints(pts);
+    // Shapes are stored as their outline; grow by half the stroke width so the
+    // visual bounds match the geometry bounds.
+    const pad = (e.width || 0) / 2 + (IS_INK.has(e.type) ? (e.width || 0) / 2 : 0);
+    out = pad ? r.expand(pad) : r;
+  }
+  e._lbSig = sig;
+  e._lbRect = out;
+  return out.clone();
+}
+
+/** Cheap fingerprint of what a computed bounds depends on. */
+function boundsSignature(e) {
+  if (e.bounds != null) return `b|${e.bounds}`;
+  const n = e.inks ? e.inks.length : e.points ? e.points.length : 0;
+  const first = e.inks ? e.inks[0] : e.points ? e.points[0] : null;
+  const last = e.inks ? e.inks[e.inks.length - 1] : e.points ? e.points[e.points.length - 1] : null;
+  const edge = (p) => (p ? (p.x != null ? `${p.x},${p.y}` : p.point || '') : '');
+  return `${e.type}|${n}|${e.width || 0}|${edge(first)}|${edge(last)}`;
 }
 
 /** Axis-aligned world bounds taking rotation into account. */
@@ -299,7 +324,7 @@ export function hitTest(e, px, py, tol) {
   }
 }
 
-/** Marquee (rubber-band) selection test. */
+/** Marquee, rubber-band, selection test. */
 export function intersectsRect(e, rect, tol = 0) {
   if (e.hidden) return false;
   if (IS_INK.has(e.type) || e.points) {
@@ -364,7 +389,7 @@ export function translateElement(e, dx, dy) {
  *
  * The highlighter's "draw straight lines" mode marks its strokes with
  * `cap: 'round'`, and a `.note` written by Microsoft Whiteboard may hold a
- * two-point (or fully collinear) highlighter instead — both render as a straight
+ * two-point, or fully collinear, highlighter instead — both render as a straight
  * band with semicircular ends.  Such a band keeps its width when the selection
  * is scaled: stretching it changes how far it reaches, not how thick the pen
  * was when it was drawn.
@@ -509,7 +534,7 @@ export function polygonPointsFor(type, rect) {
  *
  * Returns an *array of point arrays*: most curves are a single open path, but a
  * hyperbola is two disjoint branches, which the `.note` format can only express
- * as two elements (one polyline each) — the drawing tool adds them as a group.
+ * as two elements, one polyline each, — the drawing tool adds them as a group.
  *
  * @param {'parabola'|'hyperbola'|'sine'|'cubic'} curve
  * @param {Rect} rect

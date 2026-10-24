@@ -6,11 +6,11 @@
  * parses the central directory of a `File`/`Blob` and inflates single entries
  * on demand, so a 350 MB board is never read into memory as a whole.
  *
- * The parsing mirrors the server's own reader (server.mjs), including the
+ * The parsing mirrors the server's own reader, server.mjs, including the
  * ZIP64 fields, so the two agree on every archive.
  */
 
-/** fflate ships as a UMD bundle (it assigns itself to `window.fflate`). */
+/** fflate ships as a UMD bundle, which assigns itself to `window.fflate`. */
 let _fflate = null;
 let _loading = null;
 

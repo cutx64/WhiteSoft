@@ -52,9 +52,9 @@ export class SelectionBar {
     // gesture, and while text is being edited inline.
     const busy = ed.mode !== 'idle';
     if (!rect || this.hidden || busy || ed.inline?.isEditing) { this.remove(); return; }
-    // The bar's contents depend on what is selected (a single text box can be
-    // opened for editing, sticky notes can be restyled), so rebuild it only
-    // when that shape changes.
+    // The bar's contents depend on what is selected, because a single text
+    // box can be opened for editing and sticky notes can be restyled, so
+    // rebuild it only when that shape changes.
     const shape = this.shape();
     if (!this.node || this.shapeKey !== shape) {
       this.shapeKey = shape;
@@ -228,7 +228,7 @@ export class SelectionBar {
         class: 'wb-swatch' + (cur && argbToHex(c.argb).toUpperCase() === argbToHex(cur).toUpperCase() ? ' active' : ''),
         type: 'button', title: c.name, style: { background: argbToHex(c.argb) },
         // Kept on the button so Tab / Shift+Tab can apply the same colour
-        // without going through a click (see ui.cyclePaletteColor).
+        // without going through a click, see ui.cyclePaletteColor.
         dataset: { argb: c.argb },
         onclick: () => {
           const n = ed.applySelectionColor(c.argb);
@@ -280,11 +280,11 @@ export class SelectionBar {
    * "切割图片": pick the cut direction, then place the cut line on the picture.
    *
    * Choosing a direction does not cut straight away: the canvas switches to
-   * placing the line, which follows the pointer (clamped to the picture, so a
-   * click that misses still cuts at the nearest edge) and snaps to the middle.
-   * A click cuts there, Esc or a right-click cancels.
+   * placing the line, which follows the pointer, clamped to the picture so a
+   * click that misses still cuts at the nearest edge, and snaps to the
+   * middle.  A click cuts there, Esc or a right-click cancels.
    *
-   * The two halves take the original's place on the page (same layer) and the
+   * The two halves take the original's place on the page, same layer, and the
    * pair is left selected, so a second cut can be made straight away.
    */
   openSplitImage(anchor) {
@@ -348,9 +348,10 @@ export class SelectionBar {
 
     const host = ed.canvas;
     const onMove = (ev) => {
-      // Client coordinates have to lose the canvas offset first (the editor's
-      // own #localPoint does the same): screenToWorld works in canvas space, so
-      // skipping this puts the guide wherever the canvas happens to sit.
+      // Client coordinates have to lose the canvas offset first, which is
+      // what the editor's own #localPoint does too: screenToWorld works in
+      // canvas space, so skipping this puts the guide wherever the canvas
+      // happens to sit.
       const r = ed._canvasRect || ed.refreshCanvasRect();
       const world = ed.screenToWorld(ev.clientX - r.left, ev.clientY - r.top);
       state.at = splitFractionAt(img, world, axis);
@@ -384,7 +385,7 @@ export class SelectionBar {
     ed.requestRender();
   }
 
-  /** Leave cut-placement mode (called on confirm, cancel and teardown). */
+  /** Leave cut-placement mode, called on confirm, cancel and teardown. */
   cancelSplitPick() {
     if (!this.splitPick) return;
     const l = this.splitPickListeners;
@@ -403,10 +404,10 @@ export class SelectionBar {
     this.editor.requestRender();
   }
 
-  /** True while the cut line is being placed (used by the Esc handler). */
+  /** True while the cut line is being placed, used by the Esc handler. */
   get pickingSplit() { return !!this.splitPick; }
 
-  /** Cut the picture at `at` (0..1 along the cut axis). */
+  /** Cut the picture at `at`, a 0..1 fraction along the cut axis. */
   async commitSplit(img, axis, at) {
     const ed = this.editor;
     const res = await splitImage(ed, img, axis, clampSplitFraction(at));

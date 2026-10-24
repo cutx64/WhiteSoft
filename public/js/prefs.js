@@ -2,14 +2,14 @@
  * Preferences that are not part of a board.
  *
  * The board format holds what a whiteboard *contains*; how the app behaves on
- * this machine (the auto-save idle period today) belongs to the browser, so it
+ * this machine, the auto-save idle period today, belongs to the browser, so it
  * lives in `localStorage`.  Every access is defensive: a browser with storage
  * disabled must never break the app.
  */
 
 const KEY = 'whitesoft.prefs.v1';
 
-/** Auto-save idle periods offered in 设置, in minutes (0 = off). */
+/** Auto-save idle periods offered in 设置, in minutes, 0 means off. */
 export const AUTO_SAVE_CHOICES = [
   { minutes: 0, label: '关闭' },
   { minutes: 0.5, label: '30 秒' },
@@ -83,9 +83,9 @@ export const RECENT_LIMIT = 16;
  *
  * A browser never reveals a path, so the *name* identifies a file: the same
  * board opened twice — even after an edit changed its size — must not fill the
- * list with copies of itself.  Entries written before this rule existed (or by
- * an older version) are merged here, newest first, borrowing a handle from the
- * older entry when the newer one has none.
+ * list with copies of itself.  Entries written before this rule existed, or
+ * written by an older version, are merged here, newest first, borrowing a
+ * handle from the older entry when the newer one has none.
  */
 export function recentFiles() {
   const list = getPref('recentFiles', []);
@@ -113,8 +113,8 @@ export function recentFiles() {
  * Remember a file, newest first, replacing whatever was known about it.
  *
  * A remembered file is a *location*, never a copy: the browser file handle is
- * what makes it reachable again (or, when the browser has no such API, just
- * enough to recognise it and ask for it another time).
+ * what makes it reachable again, or, when the browser has no such API, just
+ * enough to recognise it and ask for it another time.
  */
 export function rememberFile(entry) {
   if (!entry || !entry.name) return recentFiles();
@@ -125,7 +125,7 @@ export function rememberFile(entry) {
     at: Date.now(),
     kind: 'note',
     source: 'local',
-    // Opening without a handle (drag & drop) must not forget where the file
+    // Opening without a handle, by drag and drop, must not forget where the file
     // lives for the next time.
     ...(previous?.handleId && !entry.handleId ? { handleId: previous.handleId } : {}),
     ...entry,
@@ -135,7 +135,7 @@ export function rememberFile(entry) {
   return trimmed;
 }
 
-/** Identity of a remembered file: its name (a browser never gives us a path). */
+/** Identity of a remembered file: its name, a browser never gives us a path. */
 export function fileKey(entry) {
   if (!entry || !entry.name) return '';
   return `name:${String(entry.name).normalize('NFC').toLowerCase()}`;

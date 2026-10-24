@@ -1,7 +1,7 @@
 /**
- * Document model + `.note` (Microsoft Whiteboard local) input/output.
+ * Document model + `.note`, Microsoft Whiteboard local, input/output.
  *
- * On-disk layout of a .note archive (a plain ZIP):
+ * On-disk layout of a .note archive, a plain ZIP:
  *   manifest.json                       document metadata + page order
  *   Pages/page<N>.json                  one file per whiteboard page
  *   Resources/Images/<guid>.<ext>       every pasted / inserted bitmap
@@ -94,7 +94,7 @@ export function referencedResources(doc) {
 }
 
 /* ------------------------------------------------------------------ *
- * Compaction (dropping resources nothing refers to)
+ * Compaction, dropping resources nothing refers to
  * ------------------------------------------------------------------ */
 /** Directories a compaction may delete from; nothing else is ever touched. */
 export const COMPACTABLE_DIRS = ['Resources/Images/', 'Resources/Document/'];
@@ -102,8 +102,8 @@ export const COMPACTABLE_DIRS = ['Resources/Images/', 'Resources/Document/'];
 /**
  * Collect every resource the board mentions.
  *
- * Resources are stored by *bare* file name (`element.fileName`,
- * `manifest.document.fileName`), and only the archive knows which directory
+ * Resources are stored by *bare* file name, given by `element.fileName` and
+ * `manifest.document.fileName`, and only the archive knows which directory
  * each one lives in, so bare names are matched against the archive's entries.
  * Strings that already carry a `Resources/…` path count as-is.  Anything the
  * walk cannot make sense of is simply kept — collecting liberally can only
@@ -121,7 +121,7 @@ function collectReferences(value, refs) {
   }
 }
 
-/** Which of `entryNames` are still in use (by full path or by bare name). */
+/** Which of `entryNames` are still in use, by full path or by bare name. */
 export function referencedEntries(entryNames, refs) {
   const out = new Set();
   for (const name of entryNames) {
@@ -138,7 +138,7 @@ export function referencedEntries(entryNames, refs) {
  * @param {object} doc
  * @param {string[]} entryNames entries of the archive being checked
  * @param {(name: string) => number} sizeOf compressed size of one entry
- * @param {(name: string) => object} entryOf archive entry record (method/usize)
+ * @param {(name: string) => object} entryOf archive entry record, method and usize
  * @returns {{removable: {name: string, bytes: number}[], bytes: number,
  *   total: number, stored: {count: number, bytes: number}}}
  */
@@ -177,8 +177,8 @@ export function planLocalCompaction(doc, entryNames, sizeOf = () => 0, entryOf =
 /**
  * Open a `.note` that lives on the user's own disk.
  *
- * Nothing is copied anywhere: the archive is read in the browser (see
- * zipread.js), pages are parsed here, and the images stay where they are — the
+ * Nothing is copied anywhere: the archive is read in the browser by
+ * zipread.js, pages are parsed here, and the images stay where they are — the
  * document keeps the reader so the renderer can pull an entry only when it
  * draws it.  Saving writes back into this very file through its handle, or
  * asks for a new location when the browser cannot hand one out.
@@ -237,14 +237,14 @@ export function serializePage(p) {
  * `FileSystemFileHandle`, so Ctrl+S overwrites the file the user picked
  * instead of asking for a new name.  The archive is streamed entry by entry —
  * pages and the manifest are recompressed, every other entry is carried over
- * byte for byte (inflated on the fly, stored verbatim) so nothing a `.note`
+ * byte for byte, inflated on the fly, stored verbatim, so nothing a `.note`
  * contained is lost, and a 300 MB board never has to fit in memory twice.
  *
  * @param {object} doc
  * @param {FileSystemFileHandle} handle
  * @param {{newFiles?: Object<string, Uint8Array>, drop?: Set<string>, recompress?: boolean}} opts
  *   `newFiles` are freshly added resources; `drop` names entries the caller has
- *   decided to discard (compaction) — they are skipped instead of copied;
+ *   decided to discard, compaction, — they are skipped instead of copied;
  *   `recompress` deflates entries that are currently stored uncompressed.
  */
 const strToU8 = (text) => new TextEncoder().encode(text);
@@ -253,7 +253,7 @@ export async function writeNoteToHandle(doc, handle, { newFiles = {}, drop = nul
   const writable = await handle.createWritable();
   const zip = new ZipWriter(writable);
   // Entries are copied from the archive as they were; that snapshot goes stale
-  // as soon as anything writes to the file (including our own previous save),
+  // as soon as anything writes to the file, including our own previous save,
   // so a failed read is retried against a fresh read of the file.
   let reader = doc.localArchive;
   try {
@@ -286,8 +286,8 @@ export async function writeNoteToHandle(doc, handle, { newFiles = {}, drop = nul
         }
         if (!rawEntry) continue;
         if (recompress && rawEntry.entry.method === 0 && rawEntry.entry.usize > 128) {
-          // Stored entry: re-add it so the writer can deflate it (it keeps the
-          // stored form when that turns out to be smaller).
+          // Stored entry: re-add it so the writer can deflate it, and it
+          // keeps the stored form when that turns out to be smaller.
           const bytes = await reader.read(name);
           if (bytes) {
             await zip.add(name, bytes);
@@ -305,7 +305,7 @@ export async function writeNoteToHandle(doc, handle, { newFiles = {}, drop = nul
         written.add(name);
       }
     } else if (doc._pdfBytes && doc.document?.fileName) {
-      // A board whose archive is gone (should not normally happen): keep the
+      // A board whose archive is gone, should not normally happen: keep the
       // embedded PDF at least.
       const name = 'Resources/Document/' + doc.document.fileName;
       if (!written.has(name)) await zip.add(name, doc._pdfBytes);
@@ -324,9 +324,9 @@ export async function writeNoteToHandle(doc, handle, { newFiles = {}, drop = nul
 /**
  * Build the whole `.note` archive in memory and return it as a Blob.
  *
- * Only used by 另存为 on browsers without writable file system access (Firefox,
- * Safari): everywhere else the archive is streamed straight into the file, so a
- * 300 MB board never has to fit in memory.
+ * Only used by 另存为 on browsers without writable file system access, that
+ * is Firefox and Safari.  Everywhere else the archive is streamed straight
+ * into the file, so a 300 MB board never has to fit in memory.
  */
 export async function noteBlob(doc, { newFiles = {}, drop = null } = {}) {
   const chunks = [];
@@ -382,8 +382,8 @@ export async function noteBlob(doc, { newFiles = {}, drop = null } = {}) {
  *
  * The page body is one viewport width wide, so at 100 % zoom it exactly fills
  * the window.  `scale` — the value Microsoft Whiteboard stores per page — is
- * the dimensionless layout factor `pageWidth / LAYOUT_WIDTH` (1440 in the
- * original app), which is what makes the sample files come out at
+ * the dimensionless layout factor `pageWidth / LAYOUT_WIDTH`, 1440 in the
+ * original app, which is what makes the sample files come out at
  * `1152 / 1440 = 0.8` and `1436.74 / 1440 = 0.9977`.
  */
 export function pdfPageBounds(pdfW, pdfH, { viewportWidth = LAYOUT_WIDTH, y = 0 } = {}) {

@@ -15,7 +15,7 @@ export function uuid() {
   });
 }
 
-/** Deep clone that survives plain JSON data only (our whole model is JSON-safe). */
+/** Deep clone that survives plain JSON data only, our whole model is JSON-safe. */
 export const clone = (v) => (v == null ? v : JSON.parse(JSON.stringify(v)));
 
 export function el(tag, attrs = {}, ...children) {
@@ -63,7 +63,7 @@ export function debounce(fn, ms) {
   };
 }
 
-/** '#AARRGGBB' (Microsoft Whiteboard / .NET ARGB) -> 'rgba(r,g,b,a)' */
+/** '#AARRGGBB', the Microsoft Whiteboard and .NET ARGB order, -> 'rgba(r,g,b,a)' */
 export function argbToRgba(argb, alphaOverride) {
   if (!argb || typeof argb !== 'string') return 'rgba(0,0,0,1)';
   let s = argb.trim();
@@ -81,7 +81,7 @@ export function argbToRgba(argb, alphaOverride) {
   return `rgba(${r},${g},${b},${Number(alpha.toFixed(4))})`;
 }
 
-/** '#AARRGGBB' -> '#RRGGBB' (for <input type=color>) */
+/** '#AARRGGBB' -> '#RRGGBB', the form an <input type=color> takes. */
 export function argbToHex(argb) {
   if (!argb) return '#000000';
   const s = argb.replace('#', '');

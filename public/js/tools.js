@@ -2,7 +2,7 @@
  * Tools — one object per toolbar entry.
  *
  * A tool receives world-space points and may mutate the editor's page.  Live
- * feedback is drawn through `editor.live` (a not-yet-committed element) and
+ * feedback is drawn through `editor.live`, a not-yet-committed element, and
  * `editor.overlayExtra`.
  */
 import {
@@ -164,7 +164,7 @@ function makePenTool(kind) {
         if (cfg.arrow && cfg.arrow !== 'none') e.arrow = cfg.arrow;
       } else {
         e = makePointsElement(T.HIGHLIGHTER, { stroke, width, points: pts, closed: false });
-        // "Draw straight lines" gives the highlight rounded (semicircular) ends.
+        // "Draw straight lines" gives the highlight rounded, semicircular, ends.
         if (this._lineMode) e.cap = 'round';
       }
       ed.live = null;
@@ -321,13 +321,13 @@ export const eraserTool = {
 /**
  * Replace a freehand stroke with the smooth polynomial curve through it.
  *
- * The fit is parametric (see `fitParametricCurve`), so it follows whatever the
+ * The fit is parametric, see `fitParametricCurve`, so it follows whatever the
  * user drew — verticals, loops, a signature — instead of only graphs.  The
  * result is a polyline, which is exactly what the `.note` format stores anyway.
  *
  * @returns {object|null} the fitted element, or null when the stroke is too
- *   short or the fit wanders too far from it (better to keep the ink than to
- *   hand back a curve that ignores the drawing)
+ *   short or the fit wanders too far from it.  Better to keep the ink than to
+ *   hand back a curve that ignores the drawing
  */
 export function fitCurveElement(e, { samples = 96 } = {}) {
   const points = elementPoints(e);
@@ -387,7 +387,7 @@ export const curveFitTool = {
   },
 };
 
-/** 曲线拟合 for whatever ink is selected (the 更多 menu entry). */
+/** 曲线拟合 for whatever ink is selected, the 更多 menu entry. */
 export function fitSelectionToCurves(ed) {
   const targets = [...ed.selection].filter((e) => e.type === T.INK || e.type === T.HIGHLIGHTER);
   if (!targets.length) return 0;
@@ -441,9 +441,10 @@ export const shapeTool = {
     let x1 = p.x, y1 = p.y;
     const shift = ev.shiftKey || this._shift;
     const kind = ed.shapeKind;
-    // The curve family lives next to the style (it is what the shape panel's
-    // curve row selects), and `buildShapeElement` reads it from the style bag —
-    // without this merge every curve came out as the default parabola.
+    // The curve family lives next to the style, since that is what the
+    // shape panel's curve row selects, and `buildShapeElement` reads it from
+    // the style bag — without this merge every curve came out as the default
+    // parabola.
     const st = kind === 'curve' ? { ...ed.shapeStyle, curve: ed.shapeCurve } : ed.shapeStyle;
 
     if (kind === T.LINE || kind === T.ARROW || kind === T.DOUBLE_ARROW) {
@@ -482,7 +483,7 @@ export const shapeTool = {
 export function buildShapeElement(kind, rect, style) {
   if (kind === 'curve') {
     // Curve shapes are plain polylines: the `.note` format already has them
-    // (Microsoft Whiteboard draws them fine), and `curve` only records which
+    // Microsoft Whiteboard draws them fine, and `curve` only records which
     // family the points came from so the UI can show it as selected.
     return curvePointsFor(style.curve || 'parabola', rect, 96).map((points) => {
       const e = makePointsElement(T.POLYLINE, {
@@ -596,7 +597,7 @@ export const tableTool = {
 };
 
 /* ------------------------------------------------------------------ *
- * Selection (lasso / marquee) + transform handles
+ * Selection by lasso or marquee, plus transform handles
  * ------------------------------------------------------------------ */
 function makeSelectTool(mode) {
   return {
@@ -770,7 +771,7 @@ function makeSelectTool(mode) {
         const denom = anchor.y - startY;
         if (Math.abs(denom) > 1e-6) sy = (anchor.y - local.y) / denom;
       }
-      // Images (and reactions) always keep their aspect ratio: whichever axis
+      // Images, and reactions, always keep their aspect ratio: whichever axis
       // the handle drives sets a single factor for both.
       const sel = [...ed.selection];
       const proportional = sel.length > 0 && sel.every((e) => e.type === T.IMAGE || e.type === T.REACTION);
@@ -855,7 +856,7 @@ function scaleElementRotated(e, sx, sy, pivotLocal, rot, bounds) {
     if (!IS_OBJECT.has(e.type)) e.rotation = 0;
   }
   // Freehand ink follows the scale; a straight highlighter band keeps the width
-  // it was drawn with (see `isStraightHighlight`).
+  // it was drawn with, see `isStraightHighlight`.
   const s = strokeScalesWithElement(e, sx, sy);
   if (s !== 1 && e.width) e.width = r4(e.width * s);
 }
@@ -899,11 +900,11 @@ export const rulerTool = {
 };
 
 /* ------------------------------------------------------------------ *
- * Ink → shape ("Beautify", Alt+B) and "Enhance inked shapes"
+ * Ink → shape, "Beautify", Alt+B, and "Enhance inked shapes"
  * ------------------------------------------------------------------ */
 /**
  * Turn a freehand stroke into the shape it most resembles: a straight line, a
- * closed polygon (rectangle / triangle / diamond / pentagon / ellipse) or a
+ * closed polygon, a rectangle, triangle, diamond, pentagon or ellipse, or a
  * smoothed polyline.  Returns the replacement element, or null.
  */
 export function beautifyElement(e) {

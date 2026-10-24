@@ -37,8 +37,24 @@ import (
 const version = "2.0.0"
 
 func main() {
+	defer func() {
+		if r := recover(); r != nil && !desktop.StdoutUsable() {
+			desktop.ShowError("WhiteSoft 已停止", fmt.Sprint(r))
+		}
+	}()
+
+	// A window build owns no console. Borrowing the shell's keeps `serve`,
+	// `--version` and error messages printing where the user expects them.
+	desktop.PrepareConsole()
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "错误："+err.Error())
+		// Started from Explorer, nothing is attached to the standard streams, so
+		// the line above reaches nobody. Without a dialog the program would
+		// vanish on a double click and simply look broken, which is exactly the
+		// report this is here to answer.
+		if !desktop.StdoutUsable() {
+			desktop.ShowError("WhiteSoft 无法启动", err.Error())
+		}
 		if errors.Is(err, desktop.ErrNoRuntime) {
 			os.Exit(2)
 		}
@@ -54,21 +70,10 @@ type options struct {
 	noWindow bool
 	debug    bool
 	version  bool
+	dataDir  string
 }
 
 func run(args []string) error {
-	// `whitesoft serve` is a sub-command; everything else is desktop mode.
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		switch args[0] {
-		case "serve":
-			args = append([]string{"--no-window"}, args[1:]...)
-		case "desktop":
-			args = args[1:]
-		default:
-			return fmt.Errorf("未知子命令 %q，可用的是 serve", args[0])
-		}
-	}
-
 	opts, err := parseFlags(args)
 	if err != nil {
 		return err
@@ -80,7 +85,16 @@ func run(args []string) error {
 		}
 		return nil
 	}
+	applyDataDir(opts.dataDir)
 	return runApp(opts)
+}
+
+// applyDataDir turns the flag into the environment variable the window reads, so
+// the choice reaches the code that picks the folder.
+func applyDataDir(dir string) {
+	if strings.TrimSpace(dir) != "" {
+		os.Setenv("WHITESOFT_DATA_DIR", dir)
+	}
 }
 
 func parseFlags(args []string) (options, error) {
@@ -99,6 +113,7 @@ func parseFlags(args []string) (options, error) {
 	fs.BoolVar(&opts.noWindow, "no-window", false, "不开窗口，只启动本地服务并打印地址")
 	fs.BoolVar(&opts.debug, "debug", false, "打开开发者工具与右键菜单，便于排查界面问题")
 	fs.BoolVar(&opts.version, "version", false, "显示版本")
+	fs.StringVar(&opts.dataDir, "data-dir", "", "存放 WebView2 数据目录的位置；默认自动挑选可写的位置")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return opts, nil
@@ -171,6 +186,19 @@ func runApp(opts options) error {
 		Height: opts.height,
 		Debug:  opts.debug,
 	})
+	// The window needs WebView2's own browser process, and a confined launch
+	// context may refuse to create it. Failing there would leave a launch that
+	// simply does not work, so the client is served in the browser instead: the
+	// same code, the same features, one click away.
+	if res.Err != nil {
+		if !desktop.StdoutUsable() {
+			desktop.ShowInfo("WhiteSoft",
+				"桌面窗口没能打开，已经改用浏览器打开同一个界面。\n\n原因：\n"+res.Err.Error())
+		}
+		if err := desktop.OpenBrowser(srv.URL()); err != nil {
+		}
+		return runHeadless(srv)
+	}
 	close(shutdown)
 	fmt.Println("窗口已关闭")
 	return res.Err

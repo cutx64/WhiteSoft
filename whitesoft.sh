@@ -60,7 +60,7 @@ die() { printf '\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 # --- 前置检查 -------------------------------------------------------------
 command -v node >/dev/null 2>&1 || die "找不到 node，请先安装 Node.js 18 或更高版本。"
 node -e 'const m=+process.versions.node.split(".")[0]; process.exit(m>=18?0:1)' \
-  || die "Node.js 版本过低（当前 $(node -v)），需要 18 或更高。"
+  || die "Node.js 版本过低，当前 $(node -v)，需要 18 或更高。"
 [ -f "$SERVER" ] || die "找不到服务端文件：$SERVER"
 
 # --- 端口 -----------------------------------------------------------------

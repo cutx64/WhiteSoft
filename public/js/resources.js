@@ -2,8 +2,8 @@
  * Image resource store.
  *
  * Handles three sources of image bytes:
- *   - entries inside an opened `.note` archive (served by the app server)
- *   - files the user pastes / inserts during the session (kept in memory)
+ *   - entries inside an opened `.note` archive, served by the app server
+ *   - files the user pastes / inserts during the session, kept in memory
  *   - newly written files destined to be saved into a `.note`
  */
 import { uuid } from './util.js';
@@ -28,7 +28,7 @@ export class ResourceStore {
 
   /**
    * Point the store at the board that is being opened.  Everything cached so
-   * far belonged to the previous board (or to a board that was just closed),
+   * far belonged to the previous board, or to a board that was just closed,
    * so it is dropped unconditionally — including the files pasted during the
    * session, which by then either live inside the saved `.note` or were
    * discarded together with the unsaved changes.
@@ -43,8 +43,8 @@ export class ResourceStore {
    * inflated on demand and turned into session object URLs, so a board with
    * hundreds of images never loads them all up front.
    *
-   * Adopt a refreshed reader for the *same* board (after saving in place the
-   * file on disk changed, so the old snapshot can no longer be read).  Unlike
+   * Adopt a refreshed reader for the *same* board: after saving in place the
+   * file on disk changed, so the old snapshot can no longer be read.  Unlike
    * `setLocalArchive` this keeps the bitmaps that are already decoded, so the
    * canvas does not flicker back to placeholders.
    */
@@ -63,7 +63,7 @@ export class ResourceStore {
     // is what made a freshly pasted image disappear after switching boards:
     // `urlFor` kept returning the dead `blob:` URL, the <img> failed to load,
     // and `has` even reported it as present so the server was never asked —
-    // only a full page reload (empty store) brought the picture back.
+    // only a full page reload, empty store, brought the picture back.
     for (const url of this.urls.values()) URL.revokeObjectURL(url);
     this.urls.clear();
     this.local.clear();
@@ -76,12 +76,12 @@ export class ResourceStore {
   urlFor(fileName) {
     // A pasted file is addressable through its session object URL, which is
     // only usable while it is still registered in `urls`; anything else comes
-    // out of the archive the board was opened from (see `#loadFromArchive`).
+    // out of the archive the board was opened from, see `#loadFromArchive`.
     const local = this.local.get(fileName);
     return local && this.urls.has(fileName) ? local.url : null;
   }
 
-  /** Synchronously fetch an already-decoded image (may be undefined). */
+  /** Synchronously fetch an already-decoded image, may be undefined. */
   get(fileName) { return this.images.get(fileName); }
 
   /** True when the image can be drawn right now or still be fetched. */
@@ -94,9 +94,9 @@ export class ResourceStore {
   load(fileName) {
     if (this.images.has(fileName)) return Promise.resolve(this.images.get(fileName));
     if (this.pending.has(fileName)) return this.pending.get(fileName);
-    // A file pasted during the session comes from memory (its object URL), even
+    // A file pasted during the session comes from memory, its object URL, even
     // while an archive-backed board is open: it is *not* inside that `.note`
-    // yet.  Only when there is no such URL does the archive (or the server)
+    // yet.  Only when there is no such URL does the archive, or the server
     // supply the bytes — otherwise a freshly pasted image would be looked up in
     // the archive, come back empty, and be placed with a guessed aspect ratio.
     const url = this.urlFor(fileName);
@@ -174,7 +174,7 @@ export class ResourceStore {
 
   isNew(fileName) { return this.local.has(fileName); }
 
-  /** Raw bytes of the files added during this session (for a local save). */
+  /** Raw bytes of the files added during this session, for a local save. */
   newFilesBytes() {
     const out = {};
     for (const [name, rec] of this.local) {
