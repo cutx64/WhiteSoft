@@ -132,10 +132,17 @@ export class ResourceStore {
     const name = 'Resources/Images/' + fileName;
     const p = (async () => {
       try {
-        const bytes = await this.archive.read(name);
-        if (!bytes) return null;
-        const url = URL.createObjectURL(new Blob([bytes]));
-        this.urls.set(fileName, url);
+        // Reuse the URL this board already handed out for the entry.  A decoded
+        // bitmap may be evicted to keep memory in check, and building a second
+        // URL for the same bytes leaves the first one alive for as long as the
+        // board stays open.
+        let url = this.urls.get(fileName);
+        if (!url) {
+          const bytes = await this.archive.read(name);
+          if (!bytes) return null;
+          url = URL.createObjectURL(new Blob([bytes]));
+          this.urls.set(fileName, url);
+        }
         const img = await new Promise((resolve) => {
           const el = new Image();
           el.onload = () => resolve(el);

@@ -214,7 +214,7 @@ function naturalPageOrder(a, b) {
 
 function normalizePage(p) {
   return {
-    elements: Array.isArray(p.elements) ? p.elements : [],
+    elements: stripPrivate(Array.isArray(p.elements) ? p.elements : []),
     scale: typeof p.scale === 'number' ? p.scale : 1,
     pdfPages: Array.isArray(p.pdfPages) ? p.pdfPages : [],
     ...(p.bg ? { bg: p.bg } : {}),
@@ -222,9 +222,39 @@ function normalizePage(p) {
   };
 }
 
+/**
+ * Keys that exist only while the board is open.
+ *
+ * An earlier build cached each element's bounding box on the element itself, so
+ * a board saved by it carries a rectangle and its signature beside the real
+ * fields.  Reading that rectangle back as a plain object is what used to make
+ * the file refuse to open, so the keys are dropped when a page is read and when
+ * it is written.  A board saved by the older build is cleaned the next time it
+ * is saved.
+ */
+const PRIVATE_ELEMENT_KEYS = ['_lbRect', '_lbSig', '_rotated', '_id'];
+
+/** Remove run-time keys from a list of elements, in place. */
+export function stripPrivate(elements) {
+  if (!Array.isArray(elements)) return elements;
+  for (const el of elements) {
+    if (!el || typeof el !== 'object') continue;
+    for (const k of PRIVATE_ELEMENT_KEYS) if (k in el) delete el[k];
+  }
+  return elements;
+}
+
+/** A page exactly as it belongs on disk, run-time keys removed. */
+export function pageForDisk(p) {
+  const out = {};
+  for (const [k, v] of Object.entries(p)) if (!k.startsWith('_')) out[k] = v;
+  out.elements = stripPrivate(out.elements || []);
+  return out;
+}
+
 /** Persist the document as a .note archive. */
 export function serializePage(p) {
-  const out = { elements: p.elements, scale: p.scale };
+  const out = { elements: stripPrivate(p.elements), scale: p.scale };
   if (p.pdfPages && p.pdfPages.length) out.pdfPages = p.pdfPages.map((x) => ({ pageNumber: x.pageNumber, bounds: x.bounds }));
   if (p.bg) out.bg = p.bg;
   return out;

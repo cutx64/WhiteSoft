@@ -86,13 +86,26 @@ function pathSignature(e, pts) {
     + `|${a.x},${a.y}|${m.x},${m.y}|${b.x},${b.y}`;
 }
 
-function cachedPath(e, env, sig, build) {
+/**
+ * Build, reuse and store the drawable geometry of one element.
+ *
+ * A pressure stroke draws two paths, the ribbon and the round caps, and both
+ * have to survive between frames.  The record carries one slot per kind: with a
+ * single slot the second call evicted the first, so every frame rebuilt the
+ * whole stroke and the cache never paid for itself.
+ */
+function cachedPath(e, env, sig, kind, build) {
   const store = env && env.pathCache;
   if (!store) return build();
-  const rec = store.get(e);
-  if (rec && rec.sig === sig) return rec.path;
+  let rec = store.get(e);
+  if (!rec || rec.sig !== sig) {
+    rec = { sig, body: null, dots: null };
+    store.set(e, rec);
+  }
+  const hit = rec[kind];
+  if (hit) return hit;
   const path = build();
-  store.set(e, { sig, path });
+  rec[kind] = path;
   return path;
 }
 
@@ -120,17 +133,19 @@ function strokeInk(ctx, pts, width, color, env, e) {
   let maxPr = 0;
   for (const p of pts) if ((p.pr || 0) > maxPr) maxPr = p.pr || 0;
 
-  const sig = pathSignature(e, pts);
+  // The two branches build different geometry from the same points, so the
+  // signature has to say which one produced the cached path.
+  const sig = pathSignature(e, pts) + (maxPr < 0.05 ? '|flat' : '|press');
   if (maxPr < 0.05) {
     // No real pressure data recorded — a plain round-joined polyline is exact.
     ctx.lineWidth = width;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.stroke(cachedPath(e, env, sig, () => polylinePath(pts, false)));
+    ctx.stroke(cachedPath(e, env, sig, 'body', () => polylinePath(pts, false)));
     return;
   }
 
-  const path = cachedPath(e, env, sig, () => {
+  const path = cachedPath(e, env, sig, 'body', () => {
     const radii = pts.map((p) => Math.max((width / 2) * pressureScale(p.pr || 0, maxPr), 0.15));
     const left = [], right = [];
     for (let i = 0; i < n; i++) {
@@ -156,7 +171,7 @@ function strokeInk(ctx, pts, width, color, env, e) {
   // Round the two ends and any joint sharper than the local radius.  These are
   // filled as a *separate* path: an arc always winds clockwise, so merging it
   // into the ribbon would cancel the overlap and punch holes in the stroke.
-  const dots = cachedPath(e, env, sig + '|dots', () => {
+  const dots = cachedPath(e, env, sig, 'dots', () => {
     const radii = pts.map((p) => Math.max((width / 2) * pressureScale(p.pr || 0, maxPr), 0.15));
     const p = new Path2D();
     p.moveTo(pts[0].x + radii[0], pts[0].y);
@@ -183,7 +198,7 @@ function strokeHighlighter(ctx, pts, width, color, e, env) {
   ctx.lineCap = highlighterIsRounded(e, pts) ? 'round' : 'butt';
   ctx.lineJoin = 'round';
   const sig = pathSignature(e, pts);
-  ctx.stroke(cachedPath(e, env, sig, () => {
+  ctx.stroke(cachedPath(e, env, sig, 'body', () => {
     if (pts.length === 1) return polylinePath([pts[0], { x: pts[0].x + 0.01, y: pts[0].y }], false);
     return polylinePath(pts, false);
   }));
@@ -211,7 +226,7 @@ function tracePolygon(ctx, pts, closed) {
 /** Shape outline as a reusable Path2D. */
 function shapePath(e, pts, env, build) {
   const sig = pathSignature(e, pts);
-  return cachedPath(e, env, sig, build);
+  return cachedPath(e, env, sig, 'body', build);
 }
 
 export function drawShape(ctx, e, env) {
@@ -614,7 +629,7 @@ export class SceneRenderer {
     this.rebuilds = 0;
     this.dpr = 1;
     this.lastStats = { ms: 0, rebuildMs: 0, rebuilt: false };
-    /** WeakMap<element, {sig: string, path: Path2D, kind: string}> */
+    /** WeakMap<element, {sig: string, body: Path2D, dots: Path2D}> */
     this.pathCache = new WeakMap();
     /**
      * Parts of the cached raster that changed, in world units.
@@ -773,14 +788,15 @@ export class SceneRenderer {
 
     if (!needs) return false;
 
-    // While a gesture is running, keep blitting the existing raster, merely
-    // rescaled, and rebuild once the user stops. A pending dirty region is not
-    // deferred: patching it is cheap and it has to land on the frame the stroke
-    // is committed on, so the guard only covers a cache with nothing to patch.
+    // While a gesture is running the raster is left as it is and rebuilt once
+    // the user stops. A pending patch is exempt: it is cheap and it has to land
+    // on the frame the change is committed on. A different page is never
+    // deferred, because a stale frame of the same board is not the same thing
+    // as the previous board's picture.
     const canPatch = samePage && covers && this.dirty.length && this.cacheValid
       && Math.abs(this.cacheScale - scale) <= 1e-6;
-    if (s.interacting && covers && this.cacheValid && !this.needsRebuild
-      && !canPatch && Math.abs(this.cacheScale - scale) <= 1e-6) {
+    if (s.interacting && samePage && covers && this.cacheValid && !canPatch
+      && Math.abs(this.cacheScale - scale) <= 1e-6) {
       this.needsRebuild = true;
       return false;
     }
@@ -790,7 +806,10 @@ export class SceneRenderer {
     // crosses its boundary is not cut off, then everything that touches the box
     // is drawn again, in page order.
     const patch = canPatch ? this.#dirtyRect() : null;
-    if (patch) {
+    // The patch can only store what the raster has room for. A change outside
+    // it would be marked as current while missing from the cache, and the
+    // element would stay invisible until something else forced a rebuild.
+    if (patch && this.cacheRect.containsRect(patch)) {
       // The box that is cleared, clipped and redrawn is one and the same, so
       // every element that reaches into it is drawn completely. Clearing one
       // box and clipping to another leaves an antialiased seam at the edge.
@@ -812,8 +831,14 @@ export class SceneRenderer {
         images: s.images, zoom: s.camera.zoom, dpr, pathCache: this.pathCache,
         scale: this.cacheScaleUsed, editing: s.editing || null,
       };
+      // An element is drawn whole once it is picked, and cleared only inside the
+      // same box. The pick box is therefore larger than the box that is cleared:
+      // a stroke paints up to half its width outside the bounds an element
+      // reports, and an element just outside the cleared box would otherwise
+      // lose the sliver that reaches into it.
+      const reach = area.expand(32);
       for (const e of s.page.elements) {
-        if (elementBounds(e).intersects(area)) drawElement(c, e, env);
+        if (elementBounds(e).intersects(reach)) drawElement(c, e, env);
       }
       c.restore();
       this.dirty.length = 0;

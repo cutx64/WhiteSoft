@@ -13,7 +13,7 @@ import { scaleElement, rotateElement } from './elements.js';
 import {
   createDocument, createPage, openLocalNote, writeNoteToHandle, noteBlob,
   importPdfAsPages, referencedResources, manifestFromDocument, LAYOUT_WIDTH,
-  planLocalCompaction,
+  planLocalCompaction, pageForDisk,
 } from './document.js';
 import { T } from './elements.js';
 import { beautifySelection, fitSelectionToCurves } from './tools.js';
@@ -1373,7 +1373,7 @@ class App {
       const files = {};
       files['manifest.json'] = strToU8(JSON.stringify(manifestFromDocument(ed.doc), null, 2));
       ed.doc.pages.forEach((p, i) => {
-        files[`Pages/page${i + 1}.json`] = strToU8(JSON.stringify(p, null, 1));
+        files[`Pages/page${i + 1}.json`] = strToU8(JSON.stringify(pageForDisk(p), null, 1));
       });
       const names = new Set();
       for (const p of ed.doc.pages) {

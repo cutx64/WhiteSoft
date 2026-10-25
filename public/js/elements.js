@@ -223,6 +223,17 @@ export function setElementPoints(e, pts) {
   else e.points = pts.map((p) => ({ point: `${r4(p.x)},${r4(p.y)}` }));
 }
 
+/**
+ * Bounds memo, keyed by element.
+ *
+ * The answer is kept off the element on purpose.  Elements are written to disk
+ * with JSON.stringify, so a cached rectangle stored as a property would be
+ * saved with the board and read back as a plain object holding four numbers and
+ * no clone method.  A WeakMap keeps the cache out of the file and lets it die
+ * with the element.
+ */
+const boundsCache = new WeakMap();
+
 /** The un-rotated bounding box of an element, in world units. */
 export function localBounds(e) {
   // A stroke's box is the extent of every point it holds, so recomputing it is
@@ -232,7 +243,8 @@ export function localBounds(e) {
   // shape stores its box as a string and the signature is that string, so an
   // unchanged shape is not re-parsed either.
   const sig = boundsSignature(e);
-  if (e._lbSig === sig && e._lbRect) return e._lbRect.clone();
+  const hit = boundsCache.get(e);
+  if (hit && hit.sig === sig) return hit.rect.clone();
   let out;
   if (e.bounds != null) {
     out = Rect.parse(e.bounds);
@@ -244,8 +256,7 @@ export function localBounds(e) {
     const pad = (e.width || 0) / 2 + (IS_INK.has(e.type) ? (e.width || 0) / 2 : 0);
     out = pad ? r.expand(pad) : r;
   }
-  e._lbSig = sig;
-  e._lbRect = out;
+  boundsCache.set(e, { sig, rect: out });
   return out.clone();
 }
 
@@ -468,7 +479,6 @@ export function rotateElement(e, rad, pivot) {
       const c = rectCornersOf(b).map((q) => rot(q.x, q.y));
       const nr = rectFromPoints(c);
       e.bounds = nr.toString();
-      e._rotated = true;
     }
   }
 }

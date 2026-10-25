@@ -2,7 +2,7 @@
  * Editor — application state, camera, input dispatch and element operations.
  */
 import { Rect, rotatePoint, rectFromPoints, boundsOfRotatedRect, handlePositions, rotateHandlePosition } from './geometry.js';
-import { clamp, clone, uid, argbToRgba, argbToHex, hexToArgb, argbAlpha } from './util.js';
+import { clamp, clone, argbToRgba, argbToHex, hexToArgb, argbAlpha } from './util.js';
 import {
   T, elementBounds, localBounds, elementCenter, translateElement, scaleElement,
   rotateElement, hitTest, intersectsRect, insideLasso, IS_OBJECT, elementPoints,
@@ -275,6 +275,11 @@ export class Editor {
     };
     this.renderer.render(s);
     this.syncPdf();
+    // The renderer never asks for a frame of its own, so a rebuild it postponed
+    // has to be requested again once the gesture is over.  A rebuild it wanted
+    // while nothing was in flight has already happened, which keeps this from
+    // turning into a loop.
+    if (this.renderer.needsRebuild && !s.interacting) this.requestRender();
   }
 
   /* ---------------------------------------------------------------- *
@@ -340,6 +345,7 @@ export class Editor {
     this.onCameraChange?.();
     this.onChange?.();
     this.requestRender();
+    this.#scheduleSettleRender();
   }
 
   panBy(dxScreen, dyScreen) {
@@ -348,6 +354,23 @@ export class Editor {
     this._lastCameraChange = performance.now();
     this.onCameraChange?.();
     this.requestRender();
+    this.#scheduleSettleRender();
+  }
+
+  /**
+   * One more paint once a camera gesture has stopped.
+   *
+   * While a gesture is in flight the renderer is allowed to leave the cached
+   * raster alone and rebuild it afterwards.  Nothing else would ask for that
+   * frame, so without this the board keeps showing the unused raster until the
+   * next thing the user touches.
+   */
+  #scheduleSettleRender() {
+    clearTimeout(this._settleTimer);
+    this._settleTimer = setTimeout(() => {
+      this._settleTimer = null;
+      this.requestRender();
+    }, 160);
   }
 
   zoomBy(factor, anchor) {
@@ -938,7 +961,6 @@ export class Editor {
         blob.arrayBuffer().then((buf) => this.resources.addBytes(new Uint8Array(buf), src.fileName.split('.').pop()));
       }
       translateElement(src, d, d);
-      src._id = uid();
       this.page.elements.push(src);
       copies.push(src);
     }
