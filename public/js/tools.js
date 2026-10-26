@@ -65,17 +65,18 @@ export const panTool = {
 /**
  * How wide the stroke being drawn is, in page units.
  *
- * The pen's width is what the cursor implies: the same number of screen pixels
- * whatever ratio the canvas is shown at, so it is divided by the page ratio.
+ * Both pens take their width as a distance *on the page*, not on the screen:
+ * the same number always gives the same stroke relative to the board, however
+ * far the canvas is zoomed in when it is drawn.  A stroke drawn with 3 at 100%
+ * and one drawn with 3 at 200% are exactly as wide as each other once both are
+ * shown at the same magnification; the one drawn while magnified simply looks
+ * that much thicker while the canvas stays zoomed in.
  *
- * The highlighter's width is a distance *on the page* instead.  The same
- * number therefore always gives the same band relative to the page, however
- * far the canvas is zoomed in when it is drawn: two highlights drawn with 24
- * at different ratios are exactly as wide as each other, and the one drawn
- * while magnified simply looks that much thicker on screen.
+ * The highlighter keeps a floor so a thin setting still reads as a band rather
+ * than a hairline.
  */
 function strokeWidthFor(ed, kind, cfg) {
-  if (kind === 'pen') return cfg.width / ed.camera.zoom;
+  if (kind === 'pen') return Math.max(cfg.width, 0.2);
   return Math.max(cfg.width, 6);
 }
 
@@ -366,15 +367,16 @@ export const curveFitTool = {
     const raw = this._pts;
     this._pts = null;
     ed.live = null;
+    const width = strokeWidthFor(ed, 'pen', ed.pen);
     if (raw.length < 4) {
       // Too short to fit anything: keep it as ink so the gesture is never lost.
-      ed.addElement(makeInk({ stroke: ed.pen.color, width: ed.pen.width / ed.camera.zoom, points: raw }), { label: '书写' });
+      ed.addElement(makeInk({ stroke: ed.pen.color, width, points: raw }), { label: '书写' });
       return;
     }
-    const probe = makeInk({ stroke: ed.pen.color, width: ed.pen.width / ed.camera.zoom, points: raw });
+    const probe = makeInk({ stroke: ed.pen.color, width, points: raw });
     const fitted = fitCurveElement(probe)
       || makePointsElement(T.POLYLINE, {
-        stroke: ed.pen.color, width: ed.pen.width / ed.camera.zoom, points: smoothPoints(raw, 2), closed: false,
+        stroke: ed.pen.color, width, points: smoothPoints(raw, 2), closed: false,
       });
     ed.addElement(fitted, { select: true, label: '曲线拟合' });
   },
@@ -382,7 +384,7 @@ export const curveFitTool = {
   _update(ed) {
     // Preview the raw stroke; the fitted curve replaces it on release.
     ed.live = makeInk({
-      stroke: ed.pen.color, width: Math.max(1, ed.pen.width) / ed.camera.zoom, points: this._pts,
+      stroke: ed.pen.color, width: strokeWidthFor(ed, 'pen', ed.pen), points: this._pts,
     });
   },
 };

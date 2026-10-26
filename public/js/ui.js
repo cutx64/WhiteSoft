@@ -1656,13 +1656,21 @@ export class UI {
    * Show a modal dialog.  Only one is ever on screen: opening a second one
    * 快捷方式连按两次、从「打开」跳到「最近使用」…， replaces the first instead of
    * stacking modals on top of each other.
+   *
+   * `onClose` runs however the dialog goes away, the foot buttons, the close
+   * button, a click on the backdrop or another dialog replacing it, so a caller
+   * that waits for an answer never waits forever.
    */
-  dialog(title, body, { wide = false, actions = [] } = {}) {
+  dialog(title, body, { wide = false, actions = [], onClose = null } = {}) {
     this.closeDialog();
     const back = el('div', { class: 'wb-modal' });
+    let told = false;
     const close = () => {
       back.remove();
       if (this.dialogNode === back) this.dialogNode = null;
+      if (told) return;
+      told = true;
+      onClose?.();
     };
     const dlg = el('div', { class: 'wb-dialog' + (wide ? ' wide' : '') },
       el('div', { class: 'wb-dialog-head' }, el('h3', { text: title }), btn('close', '关闭', close, 'sm')),
@@ -1673,13 +1681,17 @@ export class UI {
     document.body.append(back);
     back.addEventListener('pointerdown', (e) => { if (e.target === back) close(); });
     this.dialogNode = back;
+    this.dialogCloser = close;
     return { close, node: dlg };
   }
 
   /** Close whatever modal is open, no-op when there is none. */
   closeDialog() {
+    const closer = this.dialogCloser;
+    this.dialogCloser = null;
     this.dialogNode?.remove();
     this.dialogNode = null;
+    closer?.();
   }
 
   openExportDialog() {

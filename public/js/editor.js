@@ -992,6 +992,63 @@ export class Editor {
   /* ---------------------------------------------------------------- *
    * Tools
    * ---------------------------------------------------------------- */
+  /**
+   * The toolbar's whole state, as one value.
+   *
+   * Every open board keeps its own copy: the tool in hand, the three pen slots
+   * and their colours, the highlighter, the eraser, the shape and text styles.
+   * Switching tabs swaps the lot, so a board left on the pen comes back on the
+   * pen even when another board was put on the select tool in between.  What is
+   * *not* here belongs to the board itself rather than to the toolbar: the grid
+   * style and the camera live with the view, the elements with the document.
+   */
+  captureToolState() {
+    return {
+      tool: this.tool,
+      prevTool: this.prevTool,
+      shapeKind: this.shapeKind,
+      shapeCurve: this.shapeCurve,
+      pens: this.pens.map((p) => ({ ...p })),
+      activePen: this.activePen,
+      highlighter: { ...this.highlighter },
+      eraserSize: this.eraserSize,
+      textStyle: { ...this.textStyle },
+      noteStyle: { ...this.noteStyle },
+      shapeStyle: { ...this.shapeStyle },
+      reactionEmoji: this.reactionEmoji,
+      enhanceInk: this.enhanceInk,
+      snapEnabled: this.snapEnabled,
+      rulerActive: !!this.ruler.active,
+    };
+  }
+
+  /** Put a toolbar state back, the counterpart of `captureToolState`. */
+  applyToolState(state) {
+    if (!state) return;
+    this.currentTool?.cancel?.(this);
+    this.tool = state.tool || 'pen';
+    this.prevTool = state.prevTool || 'pen';
+    this.shapeKind = state.shapeKind;
+    this.shapeCurve = state.shapeCurve;
+    if (Array.isArray(state.pens) && state.pens.length) this.pens = state.pens.map((p) => ({ ...p }));
+    this.activePen = Math.min(Math.max(state.activePen | 0, 0), this.pens.length - 1);
+    this.pen = this.pens[this.activePen];
+    if (state.highlighter) this.highlighter = { ...state.highlighter };
+    if (state.textStyle) this.textStyle = { ...state.textStyle };
+    if (state.noteStyle) this.noteStyle = { ...state.noteStyle };
+    if (state.shapeStyle) this.shapeStyle = { ...state.shapeStyle };
+    if (state.eraserSize != null) this.eraserSize = state.eraserSize;
+    if (state.reactionEmoji) this.reactionEmoji = state.reactionEmoji;
+    this.enhanceInk = !!state.enhanceInk;
+    this.snapEnabled = state.snapEnabled !== false;
+    this.ruler.active = !!state.rulerActive;
+    this.live = null;
+    this.cursor = null;
+    this.refreshCursor();
+    this.onToolChange?.(this.tool);
+    this.requestRender();
+  }
+
   /** Switch between the three pen slots, Alt+1/2/3 in Whiteboard. */
   selectPen(i) {
     if (i < 0 || i >= this.pens.length) return;

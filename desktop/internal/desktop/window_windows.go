@@ -74,6 +74,10 @@ func Open(opts Options) Result {
 	applyWindowIcon(w.Window())
 	w.SetTitle(opts.Title)
 	w.SetSize(opts.Width, opts.Height, webview.HintNone)
+	// The page needs to know it is running inside the shell, and the shell needs
+	// its close hook in place before the page boots and closes the window itself.
+	w.Init("window.whitesoftDesktop = true;")
+	installCloseGuard(w, uintptr(w.Window()))
 	w.Navigate(opts.URL)
 	w.Run()
 	return Result{}

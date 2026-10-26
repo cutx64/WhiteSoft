@@ -38,6 +38,8 @@ class App {
     this.ui = new UI(this, { canvas, overlay, canvasWrap });
     this.modified = false;
     this.saving = false;
+    /** True while the window close is being sorted out, so it is asked once. */
+    this.closing = false;
     // Auto-save is a machine-level preference, so it survives a reload.
     this.autoSaveMinutes = Number(getPref('autoSaveMinutes', 0)) || 0;
     // Ceiling for a board that is edited without pause: a save every
@@ -68,6 +70,7 @@ class App {
     this.editor.requestRender();
     setTimeout(() => this.editor.resize(), 0);
     this.rearmAutoSave();
+    this.armCloseGuard();
   }
 
   /* ---------------------------------------------------------------- *
@@ -1286,6 +1289,122 @@ class App {
   /* ---------------------------------------------------------------- *
    * Unsaved-changes guard
    * ---------------------------------------------------------------- */
+  /**
+   * Take over the moment the window closes.
+   *
+   * The desktop shell holds the window's close message and asks here, because
+   * only the page knows what is unsaved.  A browser tab cannot be held that way,
+   * so it gets the browser's own prompt instead: it cannot name the boards, but
+   * it does keep the tab from vanishing with the work still in it.
+   */
+  armCloseGuard() {
+    if (window.whitesoftDesktop) {
+      window.whitesoft = { requestClose: () => this.requestClose() };
+      return;
+    }
+    window.addEventListener('beforeunload', (ev) => {
+      if (!this.workspace.tabs.some((tab) => tab.dirty)) return;
+      ev.preventDefault();
+      ev.returnValue = '';
+    });
+  }
+
+  /**
+   * The window is about to close.
+   *
+   * Called by the shell when the close box, Alt+F4 or the taskbar menu is used.
+   * Nothing goes away until this returns: the boards are counted, the question
+   * is asked when there is something to lose, and only then is the window let
+   * go.  Every path that ends without closing leaves the board untouched.
+   */
+  async requestClose() {
+    if (this.closing) return;
+    this.closing = true;
+    try {
+      // Tell the shell the question arrived, so it stops waiting and the user
+      // may take as long as they like over the answer.
+      try { window.whitesoftHold?.(); } catch { /* older shell */ }
+      const dirty = this.workspace.tabs.filter((tab) => tab.dirty);
+      if (!dirty.length) { this.#closeWindow(); return; }
+      const answer = await this.#askSaveOnClose(dirty);
+      if (answer === 'cancel') return;
+      if (answer === 'save' && !(await this.#saveTabs(dirty))) return;
+      this.#closeWindow();
+    } catch (err) {
+      console.error(err);
+      this.#closeWindow();
+    } finally {
+      this.closing = false;
+    }
+  }
+
+  /** Write `tabs` to their files, switching boards as the saves need. */
+  async #saveTabs(tabs) {
+    const back = this.workspace.activeId;
+    for (const tab of tabs) {
+      if (!tab.dirty) continue;
+      if (tab.id !== this.workspace.activeId) this.activateTab(tab.id);
+      const ok = await this.save();
+      if (!ok) {
+        if (back && this.workspace.tabs.some((tab2) => tab2.id === back)) this.activateTab(back);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Ask whether the boards that are still open should be written first.
+   *
+   * Resolves `save`, `discard` or `cancel`.  Closing the dialog counts as
+   * cancel, which is the answer that cannot lose anything.
+   */
+  #askSaveOnClose(dirty) {
+    const names = dirty.map((tab) => tab.name);
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (settled) return; settled = true; dlg.close(); resolve(v); };
+      const dlg = this.ui.dialog('关闭前保存？', el('div', {},
+        el('p', {
+          class: 'wb-hint',
+          text: dirty.length === 1
+            ? `白板「${names[0]}」还有没保存的更改。`
+            : `有 ${dirty.length} 块白板还有没保存的更改：${names.join('、')}。`,
+        }),
+        el('p', {
+          class: 'wb-hint',
+          text: '保存会写回每块白板各自的原文件；从来没保存过的白板会先让你选一个位置。',
+        }),
+        el('p', { class: 'wb-hint', text: '直接关闭的话，这些更改就丢了。' }),
+      ), {
+        // The close button, a click on the backdrop or another dialog taking
+        // over all count as cancel, so the window can never be left waiting on
+        // a question that is no longer on screen.
+        onClose: () => finish('cancel'),
+        actions: [
+          el('button', { class: 'wb-toggle', type: 'button', text: '取消', onclick: () => finish('cancel') }),
+          el('button', {
+            class: 'wb-toggle', type: 'button', text: '不保存，直接关闭',
+            onclick: () => finish('discard'),
+          }),
+          el('button', {
+            class: 'wb-primary', type: 'button', text: '保存并关闭',
+            onclick: () => finish('save'),
+          }),
+        ],
+      });
+    });
+  }
+
+  /** Let the shell close the window.  Without a shell there is nothing to do. */
+  #closeWindow() {
+    if (typeof window.whitesoftClose === 'function') {
+      window.whitesoftClose();
+      return;
+    }
+    window.close();
+  }
+
   /**
    * Ask before throwing away unsaved work.
    * Resolves true when it is safe to continue, false when the user cancels.

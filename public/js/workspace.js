@@ -36,6 +36,8 @@ export class DocTab {
     this.resources = new ResourceStore();
     this.history = new History();
     this.view = null;
+    /** Toolbar state while this board is not the one on screen, see Editor.captureToolState. */
+    this.tools = null;
     this.dirty = false;
     this.pristine = true;
   }
@@ -55,6 +57,7 @@ export class DocTab {
       zoom: editor.camera.zoom,
     };
     this.doc.currentPage = editor.pageIndex;
+    this.tools = editor.captureToolState();
   }
 }
 
@@ -108,6 +111,7 @@ export class Workspace {
   show(tab) {
     const ed = this.editor;
     ed.setDocument(tab.doc, { resources: tab.resources, history: tab.history });
+    ed.applyToolState(tab.tools);
     if (tab.view) {
       ed.gotoPage(tab.view.pageIndex, { fit: false });
       ed.camera.x = tab.view.x;

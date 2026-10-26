@@ -17,6 +17,18 @@ import { layoutRichText, drawRichLine } from './mathtext.js';
 const HIGHLIGHTER_MIN_WIDTH = 6;
 
 /**
+ * How far the cached raster may be blown up before the renderer stops using it.
+ *
+ * The cache is a bitmap of the page at a fixed resolution, so magnifying it
+ * enough turns every edge into a staircase.  Twice its resolution is where that
+ * becomes visible; past that the visible elements are drawn as vectors.
+ */
+const DIRECT_MAGNIFY = 2;
+
+/** How far a stroke may paint outside its own bounds, in world units. */
+const MAX_STROKE_REACH = 32;
+
+/**
  * Rendering options that are not part of the file format.
  * `roundStraightHighlights` also rounds the ends of highlights that were
  * drawn as a straight line in an existing .note, that is a two-point or
@@ -118,7 +130,83 @@ function polylinePath(pts, closed = false) {
   return path;
 }
 
-/** Filled variable-width ribbon that reproduces pen pressure. */
+/**
+ * The same points, joined by curves instead of straight segments.
+ *
+ * Samples arrive a few units apart, which is invisible at 100% and is a row of
+ * corners once the canvas is magnified.  A quadratic through the midpoints
+ * passes smoothly through the whole run, and it is what turns a fast drag into
+ * a curve instead of a faceted line.
+ */
+function smoothPath(pts, closed = false) {
+  const path = new Path2D();
+  const n = pts.length;
+  if (!n) return path;
+  path.moveTo(pts[0].x, pts[0].y);
+  if (n === 2) { path.lineTo(pts[1].x, pts[1].y); return path; }
+  for (let i = 1; i < n - 1; i++) {
+    path.quadraticCurveTo(pts[i].x, pts[i].y, (pts[i].x + pts[i + 1].x) / 2, (pts[i].y + pts[i + 1].y) / 2);
+  }
+  path.lineTo(pts[n - 1].x, pts[n - 1].y);
+  if (closed) path.closePath();
+  return path;
+}
+
+/** Radii of a pressure stroke, never thinner than a hairline. */
+function strokeRadii(pts, width, maxPr) {
+  return pts.map((p) => Math.max((width / 2) * pressureScale(p.pr || 0, maxPr), 0.2));
+}
+
+/**
+ * The ink of a pressure stroke, as one path.
+ *
+ * The stroke is the union of a quad per segment and a disc per sample.  Every
+ * piece is convex and they are all wound the same way, so filling them together
+ * cannot punch a hole no matter how the pressure jumps; a joint is round by
+ * construction; and the disc at each end is an exact semicircle that meets the
+ * last quad along its own diameter, so there is no step where the cap joins the
+ * body.  Building an outline instead means finding a perpendicular at each
+ * point, and near a sharp turn or a sudden change of width those perpendiculars
+ * cross and the fill folds over itself.
+ */
+function pressureStrokePath(pts, width, maxPr) {
+  const n = pts.length;
+  const radii = strokeRadii(pts, width, maxPr);
+  const p = new Path2D();
+  for (let i = 0; i + 1 < n; i++) {
+    const a = pts[i];
+    const b = pts[i + 1];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) continue;
+    const nx = -dy / len;
+    const ny = dx / len;
+    const ra = radii[i];
+    const rb = radii[i + 1];
+    // Wound the same way as the discs below: with the opposite winding the
+    // overlap would cancel and leave a seam through the middle of the stroke.
+    p.moveTo(a.x - nx * ra, a.y - ny * ra);
+    p.lineTo(b.x - nx * rb, b.y - ny * rb);
+    p.lineTo(b.x + nx * rb, b.y + ny * rb);
+    p.lineTo(a.x + nx * ra, a.y + ny * ra);
+    p.closePath();
+  }
+  for (let i = 0; i < n; i++) {
+    p.moveTo(pts[i].x + radii[i], pts[i].y);
+    p.arc(pts[i].x, pts[i].y, radii[i], 0, Math.PI * 2);
+  }
+  return p;
+}
+
+/**
+ * A pen stroke.
+ *
+ * Mouse and touch report the same pressure for every sample, so the stroke is
+ * a band of one width: it is drawn as a stroked curve, which gives an exact
+ * semicircle at each end and smooth joins at any magnification.  A pen that
+ * reports pressure needs a shape of its own, see `pressureStrokePath`.
+ */
 function strokeInk(ctx, pts, width, color, env, e) {
   const n = pts.length;
   ctx.fillStyle = color;
@@ -131,62 +219,26 @@ function strokeInk(ctx, pts, width, color, env, e) {
     return;
   }
   let maxPr = 0;
-  for (const p of pts) if ((p.pr || 0) > maxPr) maxPr = p.pr || 0;
+  let minPr = Infinity;
+  for (const p of pts) {
+    const pr = p.pr || 0;
+    if (pr > maxPr) maxPr = pr;
+    if (pr < minPr) minPr = pr;
+  }
 
-  // The two branches build different geometry from the same points, so the
-  // signature has to say which one produced the cached path.
-  const sig = pathSignature(e, pts) + (maxPr < 0.05 ? '|flat' : '|press');
-  if (maxPr < 0.05) {
-    // No real pressure data recorded — a plain round-joined polyline is exact.
+  // A band is a stroke; a varying stroke is a shape.  The signature says which
+  // one built the cached geometry.
+  const band = maxPr < 0.05 || maxPr - minPr <= maxPr * 0.02;
+  const sig = pathSignature(e, pts) + (band ? '|band' : '|press');
+
+  if (band) {
     ctx.lineWidth = width;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
-    ctx.stroke(cachedPath(e, env, sig, 'body', () => polylinePath(pts, false)));
+    ctx.stroke(cachedPath(e, env, sig, 'body', () => smoothPath(pts, false)));
     return;
   }
-
-  const path = cachedPath(e, env, sig, 'body', () => {
-    const radii = pts.map((p) => Math.max((width / 2) * pressureScale(p.pr || 0, maxPr), 0.15));
-    const left = [], right = [];
-    for (let i = 0; i < n; i++) {
-      const prev = pts[Math.max(0, i - 1)];
-      const next = pts[Math.min(n - 1, i + 1)];
-      let dx = next.x - prev.x, dy = next.y - prev.y;
-      const len = Math.hypot(dx, dy);
-      if (len < 1e-6) { dx = 1; dy = 0; } else { dx /= len; dy /= len; }
-      const nx = -dy, ny = dx;
-      const r = radii[i];
-      left.push({ x: pts[i].x + nx * r, y: pts[i].y + ny * r });
-      right.push({ x: pts[i].x - nx * r, y: pts[i].y - ny * r });
-    }
-    const p = new Path2D();
-    p.moveTo(left[0].x, left[0].y);
-    for (let i = 1; i < n; i++) p.lineTo(left[i].x, left[i].y);
-    for (let i = n - 1; i >= 0; i--) p.lineTo(right[i].x, right[i].y);
-    p.closePath();
-    return p;
-  });
-  ctx.fill(path);
-
-  // Round the two ends and any joint sharper than the local radius.  These are
-  // filled as a *separate* path: an arc always winds clockwise, so merging it
-  // into the ribbon would cancel the overlap and punch holes in the stroke.
-  const dots = cachedPath(e, env, sig, 'dots', () => {
-    const radii = pts.map((p) => Math.max((width / 2) * pressureScale(p.pr || 0, maxPr), 0.15));
-    const p = new Path2D();
-    p.moveTo(pts[0].x + radii[0], pts[0].y);
-    p.arc(pts[0].x, pts[0].y, radii[0], 0, Math.PI * 2);
-    p.moveTo(pts[n - 1].x + radii[n - 1], pts[n - 1].y);
-    p.arc(pts[n - 1].x, pts[n - 1].y, radii[n - 1], 0, Math.PI * 2);
-    for (let i = 1; i + 1 < n; i++) {
-      if (Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y) > radii[i]) {
-        p.moveTo(pts[i].x + radii[i], pts[i].y);
-        p.arc(pts[i].x, pts[i].y, radii[i], 0, Math.PI * 2);
-      }
-    }
-    return p;
-  });
-  ctx.fill(dots);
+  ctx.fill(cachedPath(e, env, sig, 'body', () => pressureStrokePath(pts, width, maxPr)));
 }
 
 function strokeHighlighter(ctx, pts, width, color, e, env) {
@@ -200,7 +252,7 @@ function strokeHighlighter(ctx, pts, width, color, e, env) {
   const sig = pathSignature(e, pts);
   ctx.stroke(cachedPath(e, env, sig, 'body', () => {
     if (pts.length === 1) return polylinePath([pts[0], { x: pts[0].x + 0.01, y: pts[0].y }], false);
-    return polylinePath(pts, false);
+    return smoothPath(pts, false);
   }));
 }
 
@@ -628,7 +680,7 @@ export class SceneRenderer {
     this.needsRebuild = false;
     this.rebuilds = 0;
     this.dpr = 1;
-    this.lastStats = { ms: 0, rebuildMs: 0, rebuilt: false };
+    this.lastStats = { ms: 0, rebuildMs: 0, rebuilt: false, direct: false };
     /** WeakMap<element, {sig: string, body: Path2D, dots: Path2D}> */
     this.pathCache = new WeakMap();
     /**
@@ -713,6 +765,25 @@ export class SceneRenderer {
     const k = camera.zoom * dpr;
     const viewWorld = new Rect(camera.x, camera.y, view.w / camera.zoom, view.h / camera.zoom);
 
+    // Past a couple of times the cache's own resolution the raster is the wrong
+    // tool: every edge would be a staircase of cache pixels, and the more the
+    // canvas is magnified the worse it looks.  There the visible elements are
+    // drawn again as vectors instead, which is exact at any magnification and
+    // cheap because a view that magnified holds almost nothing.
+    // A cache that is about to be rebuilt counts with the scale it would be
+    // built at, so the first frame at a deep zoom does not pay for a rebuild
+    // that is never used.
+    const cacheScale = this.cacheValid ? this.cacheScaleUsed : SceneRenderer.snapScale(k);
+    const magnify = k / Math.max(cacheScale, 1e-6);
+    if (magnify > DIRECT_MAGNIFY) {
+      this.#drawDirect(s, dpr, k, viewWorld);
+      this.lastStats.rebuilt = false;
+      this.lastStats.direct = true;
+      this.lastStats.ms = performance.now() - t0;
+      return;
+    }
+    this.lastStats.direct = false;
+
     // 1. everything static goes through the world-space cache: the page colour,
     //    the background pattern, the PDF backdrop and every element.  Compositing
     //    a full-page PDF bitmap costs ~15 ms per frame, so it must not happen on
@@ -764,6 +835,61 @@ export class SceneRenderer {
   static snapScale(k) {
     const snapped = Math.pow(2, Math.round(Math.log2(Math.max(k, 1e-4))));
     return clamp(snapped, 0.25, 4);
+  }
+
+  /**
+   * Draw the visible part of the page straight to the canvas.
+   *
+   * Used instead of the cached raster when that raster would have to be blown
+   * up too far to stay sharp.  Everything the cache holds is drawn again in the
+   * same order, with the elements culled to the viewport, so the picture is the
+   * one the cache would have held at that magnification, minus the pixels.
+   */
+  #drawDirect(s, dpr, k, viewWorld) {
+    const ctx = this.ctx;
+    const t0 = performance.now();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = s.backgroundColor || '#FFFFFF';
+    ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+    ctx.setTransform(k, 0, 0, k, -s.camera.x * k, -s.camera.y * k);
+
+    drawGridBackground(ctx, viewWorld, s.background);
+
+    // The backdrop is a bitmap and stays one; a smoother filter is the most
+    // that can be done for it at this magnification.
+    ctx.imageSmoothingQuality = 'high';
+    for (const pp of s.pdfPages || []) {
+      const b = Rect.parse(pp.bounds);
+      if (pp.bitmap) {
+        ctx.drawImage(pp.bitmap, b.x, b.y, b.w, b.h);
+      } else {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(b.x, b.y, b.w, b.h);
+        ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+        ctx.lineWidth = 1 / s.camera.zoom;
+        ctx.strokeRect(b.x, b.y, b.w, b.h);
+      }
+    }
+    ctx.imageSmoothingQuality = 'low';
+
+    const env = {
+      images: s.images, zoom: s.camera.zoom, dpr, pathCache: this.pathCache,
+      scale: k, editing: s.editing || null,
+    };
+    // A stroke paints half its width outside its bounds, so the culling box is
+    // grown before anything is picked.
+    const reach = viewWorld.expand(MAX_STROKE_REACH);
+    for (const e of s.page.elements) {
+      if (e.hidden) continue;
+      if (elementBounds(e).intersects(reach)) drawElement(ctx, e, env);
+    }
+
+    if (Array.isArray(s.live)) { for (const e of s.live) drawElement(ctx, e, env); }
+    else if (s.live) drawElement(ctx, s.live, env);
+    if (s.overlay) { ctx.save(); s.overlay(ctx, env); ctx.restore(); }
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this.lastStats.rebuildMs = performance.now() - t0;
   }
 
   #ensureCache(s, dpr, viewWorld) {
@@ -836,7 +962,7 @@ export class SceneRenderer {
       // a stroke paints up to half its width outside the bounds an element
       // reports, and an element just outside the cleared box would otherwise
       // lose the sliver that reaches into it.
-      const reach = area.expand(32);
+      const reach = area.expand(MAX_STROKE_REACH);
       for (const e of s.page.elements) {
         if (elementBounds(e).intersects(reach)) drawElement(c, e, env);
       }
