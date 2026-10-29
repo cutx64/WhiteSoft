@@ -7,7 +7,8 @@
  * selection onto another page, clipboard actions and z-order.
  */
 import { el, $, $$, argbToHex, argbToRgba, clamp } from './util.js';
-import { T, PALETTE, IS_OBJECT } from './elements.js';
+import { T, PALETTE, IS_OBJECT, TEXT_FONTS } from './elements.js';
+import { MATH_FONTS, DEFAULT_MATH_FONT } from './mathtext.js';
 import { colorPicker } from './colorpicker.js';
 import { splitImage, splitFractionAt, clampSplitFraction } from './imagesplit.js';
 
@@ -28,6 +29,7 @@ const ICON = {
   close: '<path d="M6 6l12 12M18 6L6 18"/>',
   edit: '<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z"/><path d="M15 6l3 3"/>',
   style: '<rect x="3.5" y="4.5" width="17" height="15" rx="4"/><path d="M7.5 10h9M7.5 14h5"/>',
+  font: '<path d="M5 19l6-14h2l6 14"/><path d="M8 13h8"/>',
 };
 
 const svg = (d, size = 16) =>
@@ -95,6 +97,10 @@ export class SelectionBar {
       // double click that would otherwise be needed.
       editable ? b('edit', only.type === T.STICKY ? '编辑便签文字' : '编辑文字',
         () => ed.editElement(only, { selectAll: false })) : null,
+      // Right beside the edit button: the typeface and the size of the box that
+      // is about to be edited, for the text and the formulas in it separately.
+      only && only.type === T.TEXT ? b('font', '改变字体大小 · 字体与字号',
+        (btn) => this.openFontPanel(btn)) : null,
       editable ? el('div', { class: 'wb-selbar-sep' }) : null,
       b('color', '改变颜色', (btn) => this.openColorPicker(btn)),
       // Cut in two: only offered for a single picture, where it means something.
@@ -214,6 +220,68 @@ export class SelectionBar {
     if (e.type === T.TEXT) return e.textColor;
     if (e.type === T.STICKY) return e.color;
     return e.stroke || null;
+  }
+
+  /* ---------------------------------------------------------------- */
+  /**
+   * Typeface, formula typeface and size for the selected text box.
+   *
+   * The two typefaces are separate choices because they come from different
+   * places: the text is a system font, while formulas are drawn by MathJax from
+   * one of its own font packages.  The size is one number for both, which is
+   * what keeps a line of mixed text and math even.
+   */
+  openFontPanel(anchor) {
+    const ed = this.editor;
+    const targets = () => [...ed.selection].filter((e) => e.type === T.TEXT);
+    const sample = targets()[0];
+    if (!sample) return;
+    const zoom = ed.camera.zoom;
+    const sizes = [12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64, 96];
+    const currentSize = Math.round((sample.fontSize || 20) * zoom);
+    // A size that is not on the list still has to be shown, otherwise the
+    // selector would read as empty for a box sized by a resize or by zooming.
+    const sizeList = sizes.includes(currentSize) ? sizes : [...sizes, currentSize].sort((a, b) => a - b);
+
+    const select = (items, value, onChange) => {
+      const s = el('select', { class: 'wb-select' });
+      for (const it of items) s.append(el('option', { value: it.value, text: it.label }));
+      s.value = value;
+      s.addEventListener('change', () => onChange(s.value));
+      return s;
+    };
+    const row = (label, control) => el('label', { class: 'wb-fieldrow' },
+      el('span', { class: 'wb-fieldname', text: label }), control);
+
+    const apply = (fn, label) => {
+      const before = ed.snapshot();
+      for (const e of targets()) fn(e);
+      ed.commitSnapshot(before, label);
+      ed.requestRender();
+      this.ui.app?.markModified?.();
+    };
+
+    const pop = el('div', { class: 'wb-selpopover wb-fontpanel' },
+      el('div', { class: 'wb-flyout-label', text: '字体与字号' }),
+      row('正文', select(TEXT_FONTS.map((f) => ({ value: f.id, label: f.label })),
+        sample.fontFamily || 'sans', (v) => {
+          ed.textStyle.fontFamily = v;
+          apply((e) => { e.fontFamily = v; }, '修改字体');
+        })),
+      row('公式', select(MATH_FONTS.map((m) => ({ value: m.id, label: m.label })),
+        sample.mathFont || DEFAULT_MATH_FONT, (v) => {
+          ed.textStyle.mathFont = v;
+          apply((e) => { e.mathFont = v; }, '修改公式字体');
+        })),
+      row('字号', select(sizeList.map((n) => ({ value: String(n), label: String(n) })), String(currentSize), (v) => {
+        const n = Number(v);
+        ed.textStyle.fontSize = n;
+        apply((e) => { e.fontSize = n / zoom; }, '修改字号');
+      })),
+      el('p', { class: 'wb-hint', text: '字号同时作用于正文和公式，两者共用一条基线。' }),
+    );
+    this.openPopover(pop);
+    void anchor;
   }
 
   openColorPicker(anchor) {

@@ -10,7 +10,7 @@ import { argbToRgba, clamp } from './util.js';
 import {
   T, POLYGON_SHAPES, IS_OBJECT, elementPoints, localBounds, gradientById,
   fontString, wrapText, LINE_HEIGHT, ellipsePointsFromRect, stickyCornerRadius,
-  elementBounds,
+  elementBounds, textPadding,
 } from './elements.js';
 import { layoutRichText, drawRichLine } from './mathtext.js';
 
@@ -415,16 +415,15 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawSticky(ctx, e, env) {
-  const b = Rect.parse(e.bounds);
-  // Rounded corners: the radius is a ratio of the shorter side, so a note
-  // keeps its shape when it is resized, see stickyCornerRadius in elements.js.
-  const r = stickyCornerRadius(e, b.w, b.h);
+/**
+ * The paper of a note, or of a text box that carries a background.
+ *
+ * The shadow is painted only in the ring around the card: a shadow cast under
+ * the card itself would show through a translucent fill and darken it.
+ */
+function drawCard(ctx, b, r, fill) {
   const shape = new Path2D();
   roundRectPath(shape, b.x, b.y, b.w, b.h, r);
-
-  // Drop shadow, painted only in the ring around the note.  A shadow cast under
-  // the note itself would show through a translucent paper and darken it.
   const halo = Math.max(14, r + 8);
   const ring = new Path2D();
   roundRectPath(ring, b.x - halo, b.y - halo, b.w + halo * 2, b.h + halo * 2, r + halo);
@@ -435,11 +434,20 @@ function drawSticky(ctx, e, env) {
   ctx.shadowBlur = 10;
   ctx.shadowOffsetY = 4;
   ctx.fillStyle = 'rgba(0,0,0,0.20)';
-  ctx.fill(shape); // clipped out inside the note; only the blurred spill lands
+  ctx.fill(shape); // clipped out inside the card; only the blurred spill lands
   ctx.restore();
 
-  ctx.fillStyle = argbToRgba(e.color || '#FFFFF275');
+  ctx.fillStyle = fill;
   ctx.fill(shape);
+  return shape;
+}
+
+function drawSticky(ctx, e, env) {
+  const b = Rect.parse(e.bounds);
+  // Rounded corners: the radius is a ratio of the shorter side, so a note
+  // keeps its shape when it is resized, see stickyCornerRadius in elements.js.
+  const r = stickyCornerRadius(e, b.w, b.h);
+  drawCard(ctx, b, r, argbToRgba(e.color || '#FFFFF275'));
 
   const pad = Math.min(10, b.w * 0.08);
   const size = e.fontSize || 18;
@@ -460,22 +468,31 @@ function drawSticky(ctx, e, env) {
 }
 
 function drawTextObject(ctx, e, env) {
-  // While this element is open in the DOM inline editor, the textarea is the
-  // only thing that may draw its text: painting it here as well shows a
-  // slightly offset second copy, ghosting, because DOM and canvas text are
-  // rasterised differently and the box only re-fits when the editor closes.
-  if (env?.editing === e) return;
   const b = Rect.parse(e.bounds);
+  // A text box may carry a background, in which case it looks like a note
+  // with the text a fixed distance inside its edge.  The card is drawn even
+  // while the box is open in the DOM editor, which paints only the text.
+  const pad = textPadding(b);
+  let clip = null;
+  if (e.fill) {
+    const r = stickyCornerRadius(e, b.w, b.h);
+    clip = drawCard(ctx, b, r, argbToRgba(e.fill));
+  }
+  if (env?.editing === e) return;
   const size = e.fontSize || 20;
+  ctx.save();
+  if (clip) ctx.clip(clip);
   ctx.fillStyle = argbToRgba(e.textColor || '#FF000000');
   ctx.font = fontString(size, e);
-  const lines = layoutRichText(ctx, e.text || '', size, Math.max(b.w, 4), e, textScale(env));
+  const innerW = Math.max(b.w - pad * 2, 4);
+  const lines = layoutRichText(ctx, e.text || '', size, innerW, e, textScale(env));
   const align = e.textAlign || 'left';
-  let y = b.y;
+  let y = b.y + pad;
   for (const line of lines) {
-    drawRichLine(ctx, line, alignX(align, b.x, b.cx, b.right, line.w), y, size, e);
+    drawRichLine(ctx, line, alignX(align, b.x + pad, b.cx, b.right - pad, line.w), y, size, e);
     y += size * LINE_HEIGHT;
   }
+  ctx.restore();
 }
 
 /** Left edge of a line given the element's alignment. */

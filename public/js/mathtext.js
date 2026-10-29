@@ -2,10 +2,10 @@
  * LaTeX support for text boxes and sticky notes.
  *
  * MathJax typesets, vendored in `public/vendor/mathjax/` with no network access,
- * TeX into an SVG synchronously; we immediately rasterise that SVG and then
- * draw the bitmap like any other image.  Everything therefore flows through
- * the renderer's world-space cache: panning, zooming and page thumbnails never
- * re-typeset anything, and PNG / PDF export picks the math up for free.
+ * TeX into an SVG; we immediately rasterise that SVG and then draw the bitmap
+ * like any other image.  Everything therefore flows through the renderer's
+ * world-space cache: panning, zooming and page thumbnails never re-typeset
+ * anything, and PNG / PDF export picks the math up for free.
  *
  * Supported delimiters, the standard TeX inline and display pairs:
  *
@@ -15,10 +15,50 @@
  * `\$` is an escaped dollar sign and stays literal text.  A lone `$` that does
  * not hug its content (`$5 and $6`) is also left alone, so ordinary prose is
  * not turned into math by accident.
+ *
+ * Every typeface MathJax ships is available, eleven of them.  They cannot share
+ * one page, so each gets its own hidden frame, created the first time a box
+ * asks for that typeface; a board written in one font never loads the others.
  */
 import { fontString, LINE_HEIGHT } from './elements.js';
+import { argbToRgba } from './util.js';
 
-const SCRIPT_URL = new URL('../vendor/mathjax/tex-svg.js', import.meta.url).href;
+/** Where the vendored MathJax lives, resolved from this module's own URL. */
+const MJ_BASE = new URL('../vendor/mathjax/', import.meta.url).href;
+const MJ_ENGINE = MJ_BASE + 'tex-svg-nofont.js';
+const MJ_FONTS = MJ_BASE + 'fonts';
+
+/**
+ * The typefaces MathJax 4 ships, all vendored.
+ *
+ * `id` is what an element stores in `mathFont`; `id` also names the font
+ * package on disk, `mathjax-<id>-font`.
+ */
+export const MATH_FONTS = [
+  { id: 'tex', label: 'TeX（默认）' },
+  { id: 'newcm', label: 'New Computer Modern' },
+  { id: 'modern', label: 'Latin Modern' },
+  { id: 'stix2', label: 'STIX 2' },
+  { id: 'termes', label: 'Termes' },
+  { id: 'pagella', label: 'Pagella' },
+  { id: 'schola', label: 'Schola' },
+  { id: 'bonum', label: 'Bonum' },
+  { id: 'asana', label: 'Asana' },
+  { id: 'dejavu', label: 'DejaVu' },
+  { id: 'fira', label: 'Fira' },
+];
+export const DEFAULT_MATH_FONT = 'tex';
+
+/** Whether `id` is a typeface we ship. */
+function knownFont(id) {
+  return MATH_FONTS.some((f) => f.id === id);
+}
+
+/** The label of a font id, for the font panel. */
+export function mathFontLabel(id) {
+  const f = MATH_FONTS.find((m) => m.id === id);
+  return f ? f.label : MATH_FONTS[0].label;
+}
 
 /** Raster heights, device px, we are willing to keep; snapped to a ladder so
  *  a continuous zoom reuses existing bitmaps instead of re-rasterising. */
@@ -28,36 +68,121 @@ const MAX_RASTERS = 240;
 /* ------------------------------------------------------------------ *
  * MathJax bootstrap
  * ------------------------------------------------------------------ */
-let mjPromise = null;
+/** One record per typeface: idle, loading, ready or error. */
+const engines = new Map();
+let onRaster = null;
 
-/** Load MathJax on first use — a board without math never pays for it. */
-export function ensureMathJax() {
-  if (mjPromise) return mjPromise;
-  mjPromise = new Promise((resolve, reject) => {
-    // MathJax reads this global before it boots.  `fontCache: 'local'` makes
-    // every SVG self-contained, with its glyph outlines in its own <defs>,
-    // which is what lets us rasterise one expression in isolation.
-    window.MathJax = {
-      startup: { typeset: false }, // we never typeset the page DOM
-      options: { enableMenu: false },
-      svg: { fontCache: 'local' },
-      ...(window.MathJax || {}),
-    };
-    const s = document.createElement('script');
-    s.src = SCRIPT_URL;
-    s.async = true;
-    s.onload = () => {
-      Promise.resolve(window.MathJax?.startup?.promise)
-        .then(() => { notifyRaster(); resolve(window.MathJax); })
-        .catch(reject);
-    };
-    s.onerror = () => { mjPromise = null; reject(new Error('MathJax 载入失败')); };
-    document.head.append(s);
-  });
-  return mjPromise;
+function engineRecord(font) {
+  const id = knownFont(font) ? font : DEFAULT_MATH_FONT;
+  let rec = engines.get(id);
+  if (!rec) {
+    rec = { id, state: 'idle', frame: null, MathJax: null, promise: null };
+    engines.set(id, rec);
+  }
+  return rec;
 }
 
-export function mathReady() { return !!window.MathJax?.tex2svg; }
+/** Called, once per arrival, when a bitmap becomes drawable. */
+export function setRasterHandler(fn) { onRaster = fn; }
+function notifyRaster() { if (onRaster) onRaster(); }
+
+/**
+ * The page that lives inside a frame: the configuration, then the engine.
+ *
+ * The configuration has to be written by the frame's own document.  Assigning
+ * `frame.contentWindow.MathJax` from here does not survive: the component
+ * reads its configuration from the global it finds when it boots, and a
+ * property set from the parent beforehand is not what it sees.
+ */
+function frameHtml(id) {
+  return '<!doctype html><meta charset="utf-8"><script>\n'
+    + 'window.MathJax = {\n'
+    + '  startup: {\n'
+    + '    typeset: false,\n'
+    // `fontCache: local` keeps every SVG self-contained, with its glyph
+    // outlines in its own <defs>, so one expression can be rasterised alone.
+    // The font ranges are loaded up front so that typesetting stays
+    // synchronous; a range that fails must not take the whole engine down.
+    + '    pageReady() {\n'
+    + '      return MathJax.startup.document.outputJax.font.loadDynamicFiles()\n'
+    + '        .catch(() => {})\n'
+    + '        .then(() => MathJax.startup.defaultPageReady());\n'
+    + '    },\n'
+    + '  },\n'
+    + '  options: { enableMenu: false },\n'
+    + '  svg: { fontCache: "local" },\n'
+    + `  output: { font: "mathjax-${id}" },\n`
+    + `  loader: { paths: { fonts: "${MJ_FONTS}" } },\n`
+    + '};\n'
+    + `</script><script src="${MJ_ENGINE}"><\/script>`;
+}
+
+/** A hidden same-origin frame, one MathJax instance per typeface. */
+function createFrame(id) {
+  const f = document.createElement('iframe');
+  f.setAttribute('aria-hidden', 'true');
+  f.tabIndex = -1;
+  f.style.cssText = 'position:absolute;left:-10000px;top:0;width:16px;height:16px;border:0;visibility:hidden';
+  f.srcdoc = frameHtml(id);
+  (document.body || document.documentElement).append(f);
+  return f;
+}
+
+const ENGINE_TIMEOUT = 30000;
+
+/**
+ * Load the engine for `font`, once.
+ *
+ * A board without math never pays for it, and a board written in one typeface
+ * never loads another, which is the whole reason this is lazy.
+ */
+export function ensureMathJax(font = DEFAULT_MATH_FONT) {
+  const rec = engineRecord(font);
+  if (rec.state === 'ready') return Promise.resolve(rec.MathJax);
+  if (rec.promise) return rec.promise;
+  rec.state = 'loading';
+  rec.promise = new Promise((resolve, reject) => {
+    const fail = (err) => {
+      rec.state = 'error';
+      rec.promise = null;
+      if (rec.frame) rec.frame.remove();
+      rec.frame = null;
+      reject(err instanceof Error ? err : new Error(String(err || 'MathJax 载入失败')));
+    };
+    try {
+      rec.frame = createFrame(rec.id);
+    } catch (err) {
+      fail(err);
+      return;
+    }
+    // The frame has no load event we can hook while it is being built from
+    // `srcdoc`, so the engine is picked up as soon as it appears.
+    const started = Date.now();
+    const wait = () => {
+      const win = rec.frame?.contentWindow;
+      const MJ = win?.MathJax;
+      if (!MJ || !MJ.startup || !MJ.startup.promise) {
+        if (Date.now() - started > ENGINE_TIMEOUT) { fail(new Error('MathJax 载入超时')); return; }
+        setTimeout(wait, 50);
+        return;
+      }
+      Promise.resolve(MJ.startup.promise)
+        .then(() => {
+          rec.MathJax = MJ;
+          rec.state = 'ready';
+          notifyRaster();
+          resolve(MJ);
+        })
+        .catch(fail);
+    };
+    setTimeout(wait, 0);
+  });
+  return rec.promise;
+}
+
+export function mathReady(font = DEFAULT_MATH_FONT) {
+  return engineRecord(font).state === 'ready';
+}
 
 /* ------------------------------------------------------------------ *
  * Parsing
@@ -126,35 +251,50 @@ export function hasMathSyntax(text) {
 /* ------------------------------------------------------------------ *
  * TeX -> SVG -> bitmap
  * ------------------------------------------------------------------ */
-/** @type {Map<string, object>} expression key -> metrics + serialised SVG */
+/** @type {Map<string, object>} `font|expression` -> metrics + serialised SVG */
 const expressions = new Map();
-/** @type {Map<string, object>} `${key}@${px}` -> {img} */
+/** @type {Map<string, object>} `${key}@${px}#${colour}` -> {img} */
 const rasters = new Map();
 const rasterizing = new Set();
-let onRaster = null;
-
-/** Called, once per arrival, when a bitmap becomes drawable. */
-export function setRasterHandler(fn) { onRaster = fn; }
-function notifyRaster() { if (onRaster) onRaster(); }
+/** How often one expression has asked for a font range that is still loading. */
+const retries = new Map();
+const MAX_RETRIES = 3;
 
 const exprKey = (latex, display) => (display ? 'D|' : 'I|') + latex;
 
-function typeset(latex, display) {
-  const key = exprKey(latex, display);
+/**
+ * Typeset one expression, or return null when the answer is not ready yet.
+ *
+ * The result is cached per typeface, so a box set in STIX 2 keeps its SVG even
+ * after another box asks for the TeX engine: the cached string does not depend
+ * on which engine happens to be loaded.
+ */
+function typeset(latex, display, font) {
+  const rec = engineRecord(font);
+  const key = rec.id + '|' + exprKey(latex, display);
   const hit = expressions.get(key);
   if (hit) return hit;
-  const MJ = window.MathJax;
-  if (!MJ?.tex2svg) { ensureMathJax().catch(() => {}); return null; }
-  let rec;
+  if (rec.state === 'error') {
+    // The engine itself failed to come up; say so once instead of retrying on
+    // every frame of every render.
+    const out = { error: true, message: '公式引擎没有加载起来' };
+    expressions.set(key, out);
+    return out;
+  }
+  if (rec.state !== 'ready') {
+    if (rec.state === 'idle') ensureMathJax(rec.id).catch(() => {});
+    return null;
+  }
+  let out;
   try {
-    const node = MJ.tex2svg(latex, { display });
+    const node = rec.MathJax.tex2svg(latex, { display });
     const svg = node.tagName?.toLowerCase() === 'svg' ? node : node.querySelector('svg');
     if (!svg) throw new Error('MathJax returned no <svg>');
     const wEx = parseFloat(svg.getAttribute('width')) || 0;
     const hEx = parseFloat(svg.getAttribute('height')) || 0;
     if (!wEx || !hEx) throw new Error('MathJax returned an empty box');
     const va = /vertical-align:\s*(-?[\d.]+)ex/.exec(svg.getAttribute('style') || '');
-    rec = {
+    out = {
       wEx, hEx,
       dEx: va ? Math.abs(parseFloat(va[1])) : 0,
       viewBox: svg.getAttribute('viewBox') || `0 0 ${wEx} ${hEx}`,
@@ -162,17 +302,37 @@ function typeset(latex, display) {
       error: false,
     };
   } catch (err) {
-    // Broken TeX never breaks the board: fall back to showing the source.
-    rec = { error: true, message: String(err?.message || err) };
+    // MathJax 4 fetches ranges of a font on demand and signals that with a
+    // "retry": it is the engine asking to be called again, not broken TeX.
+    // A range that never arrives would otherwise spin forever, so after a few
+    // attempts the expression shows its own source instead.
+    if (err && err.promise) {
+      const tries = (retries.get(key) || 0) + 1;
+      retries.set(key, tries);
+      if (tries <= MAX_RETRIES) {
+        Promise.resolve(err.promise).then(() => notifyRaster()).catch(() => notifyRaster());
+        return null;
+      }
+      out = { error: true, message: '公式字体数据没有加载完整' };
+    } else {
+      // Broken TeX never breaks the board: fall back to showing the source.
+      out = { error: true, message: String(err?.message || err) };
+    }
   }
-  expressions.set(key, rec);
-  return rec;
+  expressions.set(key, out);
+  return out;
 }
 
-function svgUrl(rec, pxH) {
+/** The SVG for one expression, painted in `color`. */
+function svgUrl(rec, pxH, color) {
   const wPx = Math.max(1, Math.round((rec.wEx / rec.hEx) * pxH));
+  // MathJax leaves the glyph colour to `currentColor`, which an <img> cannot
+  // see, so the colour is written into the markup instead.  The raster cache
+  // is keyed by it, and one expression in two colours is two entries.
+  const tint = color || '#000000';
+  const inner = String(rec.inner).replace(/currentColor/g, tint);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"`
-    + ` width="${wPx}" height="${pxH}" viewBox="${rec.viewBox}">${rec.inner}</svg>`;
+    + ` width="${wPx}" height="${pxH}" viewBox="${rec.viewBox}" style="color:${tint}">${inner}</svg>`;
   return { url: 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg), wPx };
 }
 
@@ -182,14 +342,14 @@ function bucketFor(pxH) {
 }
 
 /** Bitmap for one expression at, at least, `pxH` device pixels tall. */
-function raster(key, rec, pxH) {
+function raster(key, rec, pxH, color) {
   const bucket = bucketFor(pxH);
-  const rk = key + '@' + bucket;
+  const rk = key + '@' + bucket + '#' + (color || '#000000');
   const hit = rasters.get(rk);
   if (hit) return hit.img; // still null while decoding
   if (rasterizing.has(rk)) return null;
   rasterizing.add(rk);
-  const { url } = svgUrl(rec, bucket);
+  const { url } = svgUrl(rec, bucket, color);
   const img = new Image();
   img.decoding = 'async';
   img.onload = () => {
@@ -235,10 +395,14 @@ function fontMetrics(ctx, size, opts) {
 
 /**
  * One math atom, sized in world units for the element's font.
+ *
+ * `font` picks the typeface of the formulas, `color` the ink they are painted
+ * in, and both are part of what gets cached.
+ *
  * @returns {{error:boolean, pending:boolean, w:number, h:number, depth:number, img:Image|null}}
  */
-export function mathAtom(latex, display, ctx, size, opts = {}, pxScale = 1) {
-  const rec = typeset(latex, display);
+export function mathAtom(latex, display, ctx, size, opts = {}, pxScale = 1, font = DEFAULT_MATH_FONT, color = null) {
+  const rec = typeset(latex, display, font);
   if (!rec || rec.error) {
     ctx.font = fontString(size, opts);
     return { error: true, pending: !rec, latex, display, w: ctx.measureText(latex).width + size * 0.2, h: size, depth: size * 0.2, img: null };
@@ -247,7 +411,8 @@ export function mathAtom(latex, display, ctx, size, opts = {}, pxScale = 1) {
   const w = rec.wEx * fm.ex;
   const h = rec.hEx * fm.ex;
   const depth = rec.dEx * fm.ex;
-  const img = raster(exprKey(latex, display), rec, h * pxScale);
+  const key = engineRecord(font).id + '|' + exprKey(latex, display);
+  const img = raster(key, rec, h * pxScale, color);
   return { error: false, pending: false, latex, display, w, h, depth, ascent: fm.ascent, img };
 }
 
@@ -279,11 +444,13 @@ export function layoutRichText(ctx, text, size, maxWidth, opts = {}, pxScale = 1
   // trailing line behind, which a plain '\n' still does, like the text wrapper.
   let autoBroken = false;
   const pushLine = () => { lines.push({ items, w: lineW }); items = []; lineW = 0; autoBroken = false; };
+  const mathFont = opts.mathFont || DEFAULT_MATH_FONT;
+  const ink = argbToRgba(opts.textColor || '#FF000000');
 
   const runs = rich ? parseMathRuns(text) : [{ type: 'text', text: String(text ?? '') }];
   for (const run of runs) {
     if (run.type === 'math') {
-      const atom = mathAtom(run.latex, run.display, ctx, size, opts, pxScale);
+      const atom = mathAtom(run.latex, run.display, ctx, size, opts, pxScale, mathFont, ink);
       if (atom.display && lineW > 0) pushLine();
       if (lineW + atom.w > maxWidth && lineW > 0) pushLine();
       items.push({ kind: 'math', atom, w: atom.w });
@@ -307,7 +474,13 @@ export function layoutRichText(ctx, text, size, maxWidth, opts = {}, pxScale = 1
 
 /**
  * Draw one laid-out line.  `y` is the top of the line box and `x` the left
- * edge, matching the plain renderer, which draws with textBaseline = 'top'.
+ * edge.
+ *
+ * Both halves of a mixed line are positioned from the same baseline: text is
+ * drawn with textBaseline "alphabetic" at that baseline, and a formula is
+ * placed so its own baseline, which MathJax reports as a depth below the box,
+ * lands on the same line.  Drawing the text from the top of its box instead is
+ * what used to leave the formulas floating a few pixels higher.
  */
 export function drawRichLine(ctx, line, x, y, size, opts = {}) {
   ctx.font = fontString(size, opts);
@@ -316,8 +489,8 @@ export function drawRichLine(ctx, line, x, y, size, opts = {}) {
   for (const it of line.items) {
     if (it.kind === 'text') {
       ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillText(it.text, cx, y);
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(it.text, cx, baseline);
       cx += it.w;
       continue;
     }
@@ -334,8 +507,8 @@ export function drawRichLine(ctx, line, x, y, size, opts = {}) {
       ctx.clip();
       ctx.globalAlpha *= 0.55;
       ctx.textAlign = 'left';
-      ctx.textBaseline = 'top';
-      ctx.fillText('$' + a.latex + '$', cx, y);
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText('$' + a.latex + '$', cx, baseline);
       ctx.restore();
     }
     cx += a.w;
@@ -348,9 +521,19 @@ export function lineWidth(line) { return line.w; }
 
 /** Debug / test hook: what has been typeset and rasterised so far. */
 export function mathStats() {
+  const loaded = {};
+  const failed = {};
+  const version = {};
+  for (const f of MATH_FONTS) {
+    const rec = engineRecord(f.id);
+    loaded[f.id] = rec.state === 'ready';
+    failed[f.id] = rec.state === 'error';
+    version[f.id] = rec.MathJax?.version || null;
+  }
   return {
-    loaded: mathReady(),
-    version: window.MathJax?.version || null,
+    loaded,
+    failed,
+    version,
     expressions: expressions.size,
     rasters: rasters.size,
     pending: rasterizing.size,

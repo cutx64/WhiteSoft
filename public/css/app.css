@@ -653,3 +653,16 @@ kbd {
   animation: wb-pop .1s ease-out;
 }
 .wb-selpage-input { width: 84px; flex: none; text-align: center; }
+
+/* Font panel: one labelled row per choice, the label narrow enough that the
+   three selects line up with each other. */
+.wb-fontpanel { min-width: 236px; }
+.wb-fieldrow { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.wb-fieldname { width: 34px; flex: none; font-size: 12px; color: var(--ink-3); }
+.wb-select {
+  flex: 1; min-width: 0; height: 30px; padding: 0 8px;
+  font: inherit; font-size: 13px; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm); outline: none;
+}
+.wb-select:focus { border-color: var(--accent); }

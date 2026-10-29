@@ -13,6 +13,7 @@ package server
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -27,6 +28,10 @@ import (
 	"sync"
 	"time"
 )
+
+// compressedPrefix names the part of the client that the build stores gzipped:
+// the MathJax font data.  See tools/copyweb.
+const compressedPrefix = "vendor/mathjax"
 
 // Config describes how to host the client.
 type Config struct {
@@ -206,6 +211,13 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	f, err := h.assets.Open(name)
 	if err != nil {
+		// The MathJax font data is embedded compressed; see serveGzip.
+		if strings.HasPrefix(name, compressedPrefix+"/") {
+			if gz, gerr := h.assets.Open(name + ".gz"); gerr == nil {
+				h.serveGzip(w, r, name, gz)
+				return
+			}
+		}
 		h.notFound(w, r, name)
 		return
 	}
@@ -233,6 +245,45 @@ func mustReadAll(f fs.File) []byte {
 		return nil
 	}
 	return data
+}
+
+// serveGzip sends one of the vendored MathJax files, which the build embedded
+// compressed.
+//
+// Browsers hand us `Accept-Encoding: gzip` and unpack the stream themselves,
+// which is why the bytes go out untouched and the 31 MB of font data cost about
+// 10 MB of executable.  A client that does not accept gzip gets the file
+// inflated, so nothing depends on that header being present.
+func (h *handler) serveGzip(w http.ResponseWriter, r *http.Request, name string, gz fs.File) {
+	defer gz.Close()
+	st, err := gz.Stat()
+	if err != nil {
+		h.notFound(w, r, name)
+		return
+	}
+	setHeaders(w, name)
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Add("Vary", "Accept-Encoding")
+		if rs, ok := gz.(io.ReadSeeker); ok {
+			http.ServeContent(w, r, name, st.ModTime(), rs)
+			return
+		}
+		http.ServeContent(w, r, name, st.ModTime(), bytes.NewReader(mustReadAll(gz)))
+		return
+	}
+	zr, err := gzip.NewReader(gz)
+	if err != nil {
+		h.notFound(w, r, name)
+		return
+	}
+	defer zr.Close()
+	data, err := io.ReadAll(zr)
+	if err != nil {
+		h.notFound(w, r, name)
+		return
+	}
+	http.ServeContent(w, r, name, st.ModTime(), bytes.NewReader(data))
 }
 
 func (h *handler) notFound(w http.ResponseWriter, r *http.Request, name string) {

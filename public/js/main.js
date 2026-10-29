@@ -419,7 +419,7 @@ class App {
     const map = {
       v: 'select', m: 'marquee', g: 'pan', p: 'pen', h: 'highlighter',
       l: 'laser', e: 'eraser', r: 'ruler', s: 'shape', t: 'text',
-      n: 'sticky', b: 'table', o: 'reaction',
+      b: 'table', o: 'reaction',
     };
     if (map[k]) { e.preventDefault(); this.ui.selectTool(map[k]); }
   }

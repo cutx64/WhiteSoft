@@ -1,0 +1,1 @@
+(()=>{"use strict";MathJax._.output.fonts["mathjax-dejavu"].svg_ts.MathJaxDejavuFont.dynamicSetup("","latin-bi",{"bold-italic":{}});MathJax.loader&&MathJax.loader.checkVersion("[mathjax-dejavu]/svg/dynamic/latin-bi","4.1.3","dynamic-font")})();

@@ -62,7 +62,10 @@ export class Editor {
     this.pen = this.pens[0];
     this.highlighter = { color: '#5AFED42F', width: 24, opacity: 1, straight: false };
     this.eraserSize = 12;
-    this.textStyle = { fontSize: 20, color: '#FF000000', bold: false, italic: false, underline: false, align: 'left' };
+    this.textStyle = {
+      fontSize: 20, color: '#FF000000', bold: false, italic: false, underline: false,
+      align: 'left', fill: null, radius: STICKY_RADIUS, fontFamily: 'sans', mathFont: 'tex',
+    };
     this.noteStyle = { color: '#FFFFE6A0', fontSize: 18, color2: '#FF000000', radius: STICKY_RADIUS };
     this.shapeStyle = { stroke: '#FF1F1F1F', width: 1.6, dash: false, filled: false, rounded: false };
     this.reactionEmoji = '⭐';

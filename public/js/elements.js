@@ -121,6 +121,50 @@ export function gradientById(id) {
 /** Legacy view of the two gradients, kept for callers that only need a list. */
 export const GRADIENT_PENS = GRADIENTS.slice(0, 2).map((g) => ({ name: g.name, stops: g.stops }));
 
+/* ------------------------------------------------------------------ *
+ * Fonts
+ * ------------------------------------------------------------------ */
+/**
+ * Families a text box can be set to.
+ *
+ * Every entry is a CSS stack rather than a single name: the same document is
+ * opened on Windows, macOS and Linux, and the first family the system actually
+ * has wins.  The ids are what an element stores in `fontFamily`.
+ */
+export const TEXT_FONTS = [
+  {
+    id: 'sans',
+    label: '系统默认',
+    css: '"Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Source Han Sans SC",system-ui,sans-serif',
+  },
+  { id: 'yahei', label: '微软雅黑', css: '"Microsoft YaHei","PingFang SC","Hiragino Sans GB","Noto Sans SC",sans-serif' },
+  { id: 'simsun', label: '宋体', css: 'SimSun,"Songti SC","Noto Serif SC",serif' },
+  { id: 'simhei', label: '黑体', css: 'SimHei,"Heiti SC","Noto Sans SC",sans-serif' },
+  { id: 'kaiti', label: '楷体', css: 'KaiTi,"Kaiti SC",STKaiti,serif' },
+  { id: 'fangsong', label: '仿宋', css: 'FangSong,"Fangsong SC","Noto Serif SC",serif' },
+  { id: 'times', label: 'Times New Roman', css: '"Times New Roman",Times,"Songti SC",serif' },
+  { id: 'arial', label: 'Arial', css: 'Arial,Helvetica,"Microsoft YaHei",sans-serif' },
+  { id: 'georgia', label: 'Georgia', css: 'Georgia,"Times New Roman",serif' },
+  { id: 'mono', label: '等宽', css: 'Consolas,"Courier New","Noto Sans Mono",monospace' },
+];
+
+/** The CSS stack for a family id, falling back to the system default. */
+export function fontFamilyCss(id) {
+  const f = TEXT_FONTS.find((t) => t.id === id);
+  return f ? f.css : TEXT_FONTS[0].css;
+}
+
+/**
+ * Space between a text box edge and its text, in world units.
+ *
+ * Shared with the sticky note, and with the DOM editor that has to line up
+ * exactly with what the canvas draws.
+ */
+export function textPadding(bounds) {
+  const w = bounds && bounds.w != null ? bounds.w : 0;
+  return Math.min(10, Math.max(0, w) * 0.08);
+}
+
 /** The eight reactions Whiteboard offers. */
 export const REACTIONS = ['⭐', '❤️', '✅', '❌', '👍', '❓', '🙂', '👏'];
 
@@ -152,8 +196,18 @@ export function makeImage({ bounds, fileName, rotation = 0 }) {
   return { type: T.IMAGE, bounds: bounds.toString(), rotation, fileName };
 }
 
-export function makeText({ bounds, text, fontSize, textColor = '#FF000000', extra = {} }) {
-  return { type: T.TEXT, text, textColor, fontSize, bounds: bounds.toString(), ...extra };
+export function makeText({
+  bounds, text, fontSize, textColor = '#FF000000', fill = null,
+  radius = null, fontFamily = null, mathFont = null, extra = {},
+}) {
+  const e = { type: T.TEXT, text, textColor, fontSize, bounds: bounds.toString(), ...extra };
+  // Optional fields stay absent when unused, so a plain text box keeps the
+  // shape it has always had on disk.
+  if (fill) e.fill = fill;
+  if (radius != null) e.radius = radius;
+  if (fontFamily) e.fontFamily = fontFamily;
+  if (mathFont) e.mathFont = mathFont;
+  return e;
 }
 
 export function makeSticky({
@@ -602,8 +656,8 @@ export function shapeToRect(e) {
 }
 
 /** Text metrics helper shared by the renderer and the caret logic. */
-export function fontString(size, { bold, italic } = {}) {
-  return `${italic ? 'italic ' : ''}${bold ? '700 ' : '400 '}${size}px "Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Source Han Sans SC",system-ui,sans-serif`;
+export function fontString(size, { bold, italic, fontFamily } = {}) {
+  return `${italic ? 'italic ' : ''}${bold ? '700 ' : '400 '}${size}px ${fontFamilyCss(fontFamily)}`;
 }
 
 export function measureText(text, size, opts = {}) {

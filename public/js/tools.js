@@ -12,9 +12,9 @@ import {
 } from './geometry.js';
 import { clamp, clone } from './util.js';
 import {
-  T, makeInk, makePointsElement, makeText, makeSticky, makeTable, makeReaction,
+  T, makeInk, makePointsElement, makeText, makeTable, makeReaction,
   hitTest, elementBounds, localBounds, elementPoints, translateElement, scaleElement, rotateElement,
-  strokeScalesWithElement,
+  strokeScalesWithElement, textPadding,
   ellipsePointsFromRect, polygonPointsFor, curvePointsFor, IS_OBJECT,
 } from './elements.js';
 
@@ -529,35 +529,27 @@ export const textTool = {
   name: 'text',
   cursor: 'text',
   down(ed, p, ev, sp) {
+    // Same footprint as the sticky note it replaces: one square the size of a
+    // note, with the caret landing where the click was, inside the padding.
+    const w = 140 / ed.camera.zoom;
+    const pad = textPadding({ w });
     const e = makeText({
-      bounds: new Rect(p.x, p.y - ed.textStyle.fontSize, 240 / ed.camera.zoom, ed.textStyle.fontSize * 1.5),
+      bounds: new Rect(p.x - pad, p.y - pad, w, w),
       text: '',
       fontSize: ed.textStyle.fontSize / ed.camera.zoom,
       textColor: ed.textStyle.color,
-      extra: { bold: ed.textStyle.bold, italic: ed.textStyle.italic, underline: ed.textStyle.underline, textAlign: ed.textStyle.align },
+      fill: ed.textStyle.fill,
+      radius: ed.textStyle.radius,
+      fontFamily: ed.textStyle.fontFamily,
+      mathFont: ed.textStyle.mathFont,
+      extra: {
+        bold: ed.textStyle.bold, italic: ed.textStyle.italic,
+        underline: ed.textStyle.underline, textAlign: ed.textStyle.align,
+      },
     });
     ed.addElement(e, { select: true, label: '添加文本' });
     ed.editElement?.(e, { selectAll: true, screen: sp });
     void ev;
-  },
-  move() {},
-  up() {},
-};
-
-export const stickyTool = {
-  name: 'sticky',
-  cursor: 'copy',
-  down(ed, p) {
-    const w = 140 / ed.camera.zoom;
-    const e = makeSticky({
-      bounds: new Rect(p.x - w / 2, p.y - w / 2, w, w),
-      color: ed.noteStyle.color,
-      textColor: ed.noteStyle.color2,
-      fontSize: ed.noteStyle.fontSize / ed.camera.zoom,
-      radius: ed.noteStyle.radius,
-    });
-    ed.addElement(e, { select: true, label: '添加便签' });
-    ed.editElement?.(e, { selectAll: false });
   },
   move() {},
   up() {},
@@ -1065,7 +1057,6 @@ export const TOOLS = {
   shape: shapeTool,
   curvefit: curveFitTool,
   text: textTool,
-  sticky: stickyTool,
   table: tableTool,
   reaction: reactionTool,
   image: { name: 'image', cursor: 'copy', down() {}, move() {}, up() {} },

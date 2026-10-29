@@ -6,12 +6,10 @@
  * what makes IME composition work for Chinese / Japanese input.
  */
 import { Rect } from './geometry.js';
-import { T, fontString, LINE_HEIGHT } from './elements.js';
+import { T, fontString, fontFamilyCss, textPadding, LINE_HEIGHT } from './elements.js';
 import { argbToRgba } from './util.js';
 import { el } from './util.js';
 import { layoutRichText, ensureMathJax, hasMathSyntax } from './mathtext.js';
-
-const FONT_STACK = '"Segoe UI","Microsoft YaHei","PingFang SC","Hiragino Sans GB","Source Han Sans SC",system-ui,sans-serif';
 
 export class InlineEditor {
   constructor(editor) {
@@ -70,7 +68,7 @@ export class InlineEditor {
       ed.onContentChange?.();
       // Start fetching MathJax as soon as LaTeX shows up, so the formulas are
       // typeset the moment the editor closes.
-      if (hasMathSyntax(ta.value)) ensureMathJax().catch(() => {});
+      if (hasMathSyntax(ta.value)) ensureMathJax(target.mathFont).catch(() => {});
       ed.renderer.invalidate();
       ed.requestRender();
       this.#grow(wrap, ta, target);
@@ -94,7 +92,9 @@ export class InlineEditor {
     ta.style.height = h + 'px';
     wrap.style.height = h + 'px';
     const w = Math.max(ta.scrollWidth, 30);
-    if (target.type === T.TEXT) {
+    // A plain text box widens with its text; a box with a background keeps the
+    // width the user gave it and wraps inside, like a note.
+    if (target.type === T.TEXT && !target.fill) {
       const minW = Math.max(w, 30);
       if (minW > parseFloat(wrap.style.width || '0')) wrap.style.width = minW + 'px';
     }
@@ -106,16 +106,16 @@ export class InlineEditor {
     const s = ed.worldToScreen(b.x, b.y);
     const zoom = ed.camera.zoom;
     const size = (target.fontSize || 20) * zoom;
-    const isNote = target.type === T.STICKY;
-    const padX = isNote ? Math.min(10, b.w * 0.08) * zoom : 0;
-    const padY = isNote ? Math.min(10, b.w * 0.08) * zoom : 0;
+    // Text boxes and notes both keep the text a padding away from their edge,
+    // and the editor has to sit exactly where the canvas draws the text.
+    const pad = textPadding(b) * zoom;
 
     Object.assign(wrap.style, {
       position: 'absolute',
-      left: (s.x + padX) + 'px',
-      top: (s.y + padY) + 'px',
-      width: Math.max(20, b.w * zoom - padX * 2) + 'px',
-      height: Math.max(size * LINE_HEIGHT, b.h * zoom - padY * 2) + 'px',
+      left: (s.x + pad) + 'px',
+      top: (s.y + pad) + 'px',
+      width: Math.max(20, b.w * zoom - pad * 2) + 'px',
+      height: Math.max(size * LINE_HEIGHT, b.h * zoom - pad * 2) + 'px',
       transform: target.rotation ? `rotate(${target.rotation}rad)` : '',
       transformOrigin: 'center center',
       zIndex: 40,
@@ -136,7 +136,7 @@ export class InlineEditor {
       margin: '0',
       textAlign: target.textAlign || 'left',
       caretColor: argbToRgba(target.textColor || '#FF000000'),
-      fontFamily: FONT_STACK,
+      fontFamily: fontFamilyCss(target.fontFamily),
     });
   }
 
@@ -183,7 +183,7 @@ export class InlineEditor {
             border: '1px solid ' + argbToRgba(target.stroke || '#FF808285'),
             padding: '4px 6px',
             fontSize: (target.fontSize || 16) * ed.camera.zoom + 'px',
-            fontFamily: FONT_STACK,
+            fontFamily: fontFamilyCss(null),
             color: argbToRgba(target.textColor || '#FF000000'),
             fontWeight: target.headerRow && r === 0 ? '700' : '400',
             background: target.headerRow && r === 0 ? 'rgba(0,0,0,0.05)' : 'transparent',
@@ -256,8 +256,9 @@ export class InlineEditor {
       if (this.onCommit) this.onCommit(target, { changed: false, before, after });
       return;
     }
-    // Text/notes shrink to fit the content they grew to.
-    if (target.type === T.TEXT) fitTextBox(target);
+    // Text without a background shrinks to fit the content it grew to; a box
+    // with a background keeps the shape the user gave it, like a note.
+    if (target.type === T.TEXT && !target.fill) fitTextBox(target);
     ed.history.push('编辑内容',
       () => { Object.assign(target, before); ed.invalidate(); },
       () => { Object.assign(target, after); ed.invalidate(); });
@@ -278,5 +279,9 @@ export function fitTextBox(e) {
   let w = 0;
   for (const line of lines) w = Math.max(w, line.w);
   if (e.text === '') w = size * 2;
-  e.bounds = new Rect(b.x, b.y, Math.max(w + size * 0.4, size), Math.max(lines.length, 1) * size * LINE_HEIGHT).toString();
+  // The fitted box has to hold the padding on both sides as well as the text.
+  let width = Math.max(w + size * 0.4, size);
+  width += textPadding({ w: width }) * 2;
+  const height = Math.max(lines.length, 1) * size * LINE_HEIGHT;
+  e.bounds = new Rect(b.x, b.y, width, height + textPadding({ w: width }) * 2).toString();
 }

@@ -145,7 +145,6 @@ export class UI {
       ['ruler', 'ruler', '直尺 · R / Alt+R — 沿尺边画直线'],
       ['shape', 'shape', '形状 · S'],
       ['text', 'text', '文本框 · T'],
-      ['sticky', 'sticky', '便签 · N'],
       ['reaction', 'reaction', '反应 · Alt+E'],
     ];
     const toolEls = defs.map(([id, icon, title], i) => {
@@ -326,7 +325,6 @@ export class UI {
     else if (id === 'laser') this.closeFlyout();
     else if (id === 'shape') this.openShapeFlyout(anchor);
     else if (id === 'text') this.openTextFlyout(anchor);
-    else if (id === 'sticky') this.openStickyFlyout(anchor);
     else if (id === 'reaction') this.openReactionFlyout(anchor);
     else this.closeFlyout();
   }
@@ -545,7 +543,6 @@ export class UI {
     const app = this.app;
     return [
       this.#menuItem({ label: '文本框', key: 'T', run: () => { ed.setTool('text'); this.syncTools(); } }),
-      this.#menuItem({ label: '便签', key: 'N', run: () => { ed.setTool('sticky'); this.syncTools(); } }),
       this.#menuItem({ label: '表格', key: 'B', run: () => { ed.setTool('table'); this.syncTools(); } }),
       this.#menuItem({ label: '反应', run: () => { ed.setTool('reaction'); this.syncTools(); } }),
       this.#menuSep(),
@@ -1276,6 +1273,32 @@ export class UI {
         },
       }));
     }
+    // The background a text box can carry is what used to be the sticky note.
+    // The values here do double duty, like the rest of the panel: they are the
+    // defaults for the next box and they apply to the selected boxes at once.
+    const filled = () => [...ed.selection].filter((el2) => el2.type === T.TEXT);
+    const sampleFill = (filled()[0] && filled()[0].fill) || ed.textStyle.fill || '#FFFFE6A0';
+    const fillAlpha = Math.round((argbAlpha(sampleFill) / 255) * 100);
+    const curRadius = (filled()[0] && filled()[0].radius != null ? filled()[0].radius : ed.textStyle.radius) ?? 0.12;
+    let pendingFill = null;
+    const paintFillLive = (argb) => {
+      ed.textStyle.fill = argb;
+      const list = filled();
+      if (!list.length) return;
+      if (!pendingFill || pendingFill.elements !== ed.page.elements) {
+        pendingFill = { snap: ed.snapshot(), elements: ed.page.elements };
+      }
+      for (const el2 of list) el2.fill = argb;
+      ed.invalidate();
+    };
+    const commitFill = () => {
+      if (!pendingFill) return;
+      const { snap, elements } = pendingFill;
+      pendingFill = null;
+      if (elements !== ed.page.elements) return;
+      ed.commitSnapshot(snap, '修改背景');
+    };
+
     const content = el('div', { class: 'wb-flyout-body' },
       this.colorField({
         label: '颜色',
@@ -1300,14 +1323,51 @@ export class UI {
         styleToggle('underline', '下划线', 'U'),
       ),
       el('div', { class: 'wb-flyout-label', text: '对齐' }), alignRow,
+      this.colorField({
+        label: '背景',
+        palette: PALETTE.note,
+        current: sampleFill,
+        cols: 6,
+        allowAlpha: true,
+        onPick: (c) => { paintFillLive(c); commitFill(); },
+        onLive: (c) => paintFillLive(c),
+        onCommit: (c) => { paintFillLive(c); commitFill(); },
+      }),
+      el('div', { class: 'wb-row' },
+        el('button', {
+          class: 'wb-toggle', type: 'button', text: '无背景',
+          title: '去掉背景，只留文字',
+          onclick: () => {
+            ed.textStyle.fill = null;
+            applyToSelectionUI(ed, (el2) => { delete el2.fill; });
+          },
+        }),
+      ),
+      el('div', { class: 'wb-flyout-label', text: '不透明度' }),
+      this.slider('透明度', fillAlpha, 10, 100, 5, (v) => {
+        // Transparency lives in the alpha of the background colour, so it
+        // travels with the file like the sticky note's did.
+        const alpha = Math.round((v / 100) * 255);
+        const base = ed.textStyle.fill || '#FFFFE6A0';
+        paintFillLive(hexToArgb(argbToHex(base), alpha));
+      }, (v) => `${Math.round(v)}%`, commitFill),
+      el('div', { class: 'wb-flyout-label', text: '圆角' }),
+      this.slider('圆角', Math.round(curRadius * 100), 0, 50, 1, (v) => {
+        const r = v / 100;
+        ed.textStyle.radius = r;
+        const list = filled();
+        if (!list.length) return;
+        if (!pendingFill || pendingFill.elements !== ed.page.elements) {
+          pendingFill = { snap: ed.snapshot(), elements: ed.page.elements };
+        }
+        for (const el2 of list) el2.radius = r;
+        ed.invalidate();
+      }, (v) => `${Math.round(v)}%`, commitFill),
       el('p', { class: 'wb-hint', text: '在画布上单击即可输入文字，支持中文输入法。' }),
       el('p', { class: 'wb-hint', text: '支持 LaTeX：$x^2$ 行内公式，$$\\int_0^1 x\\,dx$$ 独立公式，由 MathJax 渲染。' }),
+      el('p', { class: 'wb-hint', text: '选中文本框后，操作栏里的字体按钮可以改正文与公式的字体、字号。' }),
     );
     this.openFlyout(anchor, content, { title: '文本' });
-  }
-
-  openStickyFlyout(anchor) {
-    this.openFlyout(anchor, this.#stickyStyleBody(), { title: '便签' });
   }
 
   /** The same panel, opened from the selection's action bar. */
@@ -1746,7 +1806,7 @@ export class UI {
       ['V / M / G', '套索选择 / 矩形框选 / 移动画布'],
       ['P / H / L / E', '笔 / 荧光笔 / 激光笔 / 橡皮擦'],
       ['R', '尺子开关 · 沿尺边画直线'],
-      ['S / T / N / B / O', '形状 / 文本 / 便签 / 表格 / 反应'],
+      ['S / T / B / O', '形状 / 文本 / 表格 / 反应'],
       ['Shift + N', '新建白板 · 大写字母是独立的快捷键'],
       ['Shift + 绘制', '直线 / 正方形 / 正圆'],
       ['Tab / Shift + Tab', '调色盘里的下一个 / 上一个颜色'],
