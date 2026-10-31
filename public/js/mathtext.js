@@ -32,11 +32,12 @@ const MJ_FONTS = MJ_BASE + 'fonts';
  * The typefaces MathJax 4 ships, all vendored.
  *
  * `id` is what an element stores in `mathFont`; `id` also names the font
- * package on disk, `mathjax-<id>-font`.
+ * package on disk, `mathjax-<id>-font`.  The first entry is the default for a
+ * new text box, New Computer Modern being what MathJax 4 itself starts with.
  */
 export const MATH_FONTS = [
-  { id: 'tex', label: 'TeX（默认）' },
-  { id: 'newcm', label: 'New Computer Modern' },
+  { id: 'newcm', label: 'New Computer Modern（默认）' },
+  { id: 'tex', label: 'TeX' },
   { id: 'modern', label: 'Latin Modern' },
   { id: 'stix2', label: 'STIX 2' },
   { id: 'termes', label: 'Termes' },
@@ -47,7 +48,7 @@ export const MATH_FONTS = [
   { id: 'dejavu', label: 'DejaVu' },
   { id: 'fira', label: 'Fira' },
 ];
-export const DEFAULT_MATH_FONT = 'tex';
+export const DEFAULT_MATH_FONT = 'newcm';
 
 /** Whether `id` is a typeface we ship. */
 function knownFont(id) {
@@ -432,7 +433,7 @@ export function mathAtom(latex, display, ctx, size, opts = {}, pxScale = 1, font
  * @param {number} maxWidth
  * @param {object} opts   font options, bold and italic
  * @param {number} pxScale world units -> device pixels, for raster sharpness
- * @returns {Array<{items:Array<object>, w:number}>}
+ * @returns {Array<{items:Array<object>, w:number, rise:number, height:number}>}
  */
 export function layoutRichText(ctx, text, size, maxWidth, opts = {}, pxScale = 1) {
   ctx.font = fontString(size, opts);
@@ -440,10 +441,28 @@ export function layoutRichText(ctx, text, size, maxWidth, opts = {}, pxScale = 1
   const lines = [];
   let items = [];
   let lineW = 0;
+  // A line is normally exactly one line box tall, but a display formula can be
+  // taller than that, and it must push the lines around it away instead of
+  // growing over them.  `rise` is how much lower the line starts for that, and
+  // `height` its full height from there.
+  const fm = fontMetrics(ctx, size, opts);
+  const textDescent = size * LINE_HEIGHT - fm.ascent;
   // Display math closes its own line, which must not also leave an empty
   // trailing line behind, which a plain '\n' still does, like the text wrapper.
   let autoBroken = false;
-  const pushLine = () => { lines.push({ items, w: lineW }); items = []; lineW = 0; autoBroken = false; };
+  const pushLine = () => {
+    let ascent = fm.ascent;
+    let descent = textDescent;
+    for (const it of items) {
+      if (it.kind !== 'math') continue;
+      ascent = Math.max(ascent, it.atom.h - it.atom.depth);
+      descent = Math.max(descent, it.atom.depth);
+    }
+    lines.push({ items, w: lineW, rise: ascent - fm.ascent, height: ascent + descent });
+    items = [];
+    lineW = 0;
+    autoBroken = false;
+  };
   const mathFont = opts.mathFont || DEFAULT_MATH_FONT;
   const ink = argbToRgba(opts.textColor || '#FF000000');
 

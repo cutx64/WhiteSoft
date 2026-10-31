@@ -277,11 +277,16 @@ export function fitTextBox(e) {
   // width has to come from the same layout the renderer uses.
   const lines = layoutRichText(c, e.text || '', size, Infinity, e);
   let w = 0;
-  for (const line of lines) w = Math.max(w, line.w);
+  let h = 0;
+  for (const line of lines) {
+    w = Math.max(w, line.w);
+    // A display formula is taller than a line box, and the box has to hold it.
+    h += line.height;
+  }
   if (e.text === '') w = size * 2;
   // The fitted box has to hold the padding on both sides as well as the text.
   let width = Math.max(w + size * 0.4, size);
   width += textPadding({ w: width }) * 2;
-  const height = Math.max(lines.length, 1) * size * LINE_HEIGHT;
+  const height = h || size * LINE_HEIGHT;
   e.bounds = new Rect(b.x, b.y, width, height + textPadding({ w: width }) * 2).toString();
 }

@@ -462,8 +462,10 @@ function drawSticky(ctx, e, env) {
   const maxY = b.bottom - pad + size * 0.35;
   for (const line of lines) {
     if (y > maxY) break;
-    drawRichLine(ctx, line, alignX(align, b.x + pad, b.cx, b.right - pad, line.w), y, size, e);
-    y += size * LINE_HEIGHT;
+    const ly = y + line.rise;
+    const left = alignX(lineAlign(line, align), b.x + pad, b.cx, b.right - pad, line.w);
+    drawRichLine(ctx, line, left, ly, size, e);
+    y = ly + line.height;
   }
 }
 
@@ -489,10 +491,27 @@ function drawTextObject(ctx, e, env) {
   const align = e.textAlign || 'left';
   let y = b.y + pad;
   for (const line of lines) {
-    drawRichLine(ctx, line, alignX(align, b.x + pad, b.cx, b.right - pad, line.w), y, size, e);
-    y += size * LINE_HEIGHT;
+    const ly = y + line.rise;
+    const left = alignX(lineAlign(line, align), b.x + pad, b.cx, b.right - pad, line.w);
+    drawRichLine(ctx, line, left, ly, size, e);
+    y = ly + line.height;
   }
   ctx.restore();
+}
+
+/**
+ * Alignment for one line.
+ *
+ * A display formula, one written `$$…$$`, owns its line, and that line is
+ * centred in the box whatever alignment the rest of the text uses: a display
+ * formula is a block of its own, and hanging it off the left edge is what the
+ * panel's "centre" would otherwise have to be set to by hand.
+ */
+function lineAlign(line, align) {
+  for (const it of line.items) {
+    if (it.kind === 'math' && it.atom.display) return 'center';
+  }
+  return align;
 }
 
 /** Left edge of a line given the element's alignment. */
