@@ -45,6 +45,15 @@ type Config struct {
 // familiar 8787; anything already there pushes it to the next free port.
 const DefaultPort = 8787
 
+// portSpan is how many ports are tried from a starting point.
+const portSpan = 50
+
+// altPort is the second window, used when the whole of DefaultPort's window is
+// unavailable.  Windows lets Hyper-V, WSL and Docker reserve blocks of ports,
+// and inside such a block every bind fails with an access error rather than a
+// conflict, so a reserved block takes out the entire first window at once.
+const altPort = 9000
+
 // Server is a running listener.
 type Server struct {
 	url   string
@@ -112,23 +121,79 @@ func listen(host string, want int) (net.Listener, int, string, error) {
 		}
 		ln, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprint(want)))
 		if err != nil {
-			return nil, 0, "", fmt.Errorf("端口 %d 已被占用：%w", want, err)
+			return nil, 0, "", fmt.Errorf("端口 %d %s%s", want, portProblem(err), portHint(err))
 		}
 		return ln, want, "", nil
 	}
 	// Prefer the documented default so the URL (and any bookmark) stays put;
 	// only move aside when something else already listens there.
-	for p := DefaultPort; p < DefaultPort+50; p++ {
+	ln, port, note, first := scanPorts(host, DefaultPort, portSpan)
+	if first == nil {
+		return ln, port, note, nil
+	}
+	// A blocked window moves to one more window before giving up on a stable
+	// address; both being blocked is rare and worth one more try.
+	ln, port, note, _ = scanPorts(host, altPort, portSpan)
+	if ln != nil {
+		return ln, port, fmt.Sprintf("端口 %d 到 %d %s，改用 %d", DefaultPort, DefaultPort+portSpan-1,
+			portProblem(first), port), nil
+	}
+	// Last resort: let the system choose, so the window always opens.  The
+	// address changes from run to run, but the app is the only client of it.
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return nil, 0, "", fmt.Errorf("没有可用的本地端口：%v", err)
+	}
+	port = ln.Addr().(*net.TCPAddr).Port
+	return ln, port, fmt.Sprintf("端口 %d 到 %d 与 %d 到 %d %s，改用系统分配的 %d",
+		DefaultPort, DefaultPort+portSpan-1, altPort, altPort+portSpan-1, portProblem(first), port), nil
+}
+
+// scanPorts walks a window of ports and returns the first one it could bind,
+// along with why the first port of the window was not the one.  The returned
+// error is the failure of that first port, nil when it was the one taken.
+func scanPorts(host string, start, span int) (net.Listener, int, string, error) {
+	var firstErr error
+	for p := start; p < start+span; p++ {
 		ln, err := net.Listen("tcp", net.JoinHostPort(host, fmt.Sprint(p)))
 		if err == nil {
-			note := ""
-			if p != DefaultPort {
-				note = fmt.Sprintf("端口 %d 已被占用，改用 %d", DefaultPort, p)
+			if p == start {
+				return ln, p, "", nil
 			}
-			return ln, p, note, nil
+			return ln, p, fmt.Sprintf("端口 %d %s，改用 %d", start, portProblem(firstErr), p), nil
+		}
+		if firstErr == nil {
+			firstErr = err
 		}
 	}
-	return nil, 0, "", fmt.Errorf("%d 到 %d 之间的端口都被占用", DefaultPort, DefaultPort+50)
+	return nil, 0, "", firstErr
+}
+
+// portProblem says, in one short phrase, why a port could not be bound.
+func portProblem(err error) string {
+	switch {
+	case err == nil:
+		return "不可用"
+	case portDenied(err):
+		return "被系统保留"
+	case portBusy(err):
+		return "已被其他程序占用"
+	default:
+		return "无法监听：" + err.Error()
+	}
+}
+
+// portHint explains the uncommon case at length, for the dialog an explicit
+// --port failure ends up in.  A reserved port looks free in netstat, which is
+// exactly what makes the short phrase confusing.
+func portHint(err error) string {
+	if !portDenied(err) {
+		return ""
+	}
+	return "\n\n这个端口不是被别的程序占着，而是被 Windows 预留了。" +
+		"Hyper-V、WSL 与 Docker 会预留整段端口，用\n" +
+		"netsh interface ipv4 show excludedportrange protocol=tcp\n" +
+		"可以看到这些区间。不指定 --port 时程序会自动避开它们。"
 }
 
 // URL is the address the window should show.

@@ -1,4 +1,4 @@
-# WhiteSoft 桌面端，Go 实现
+﻿# WhiteSoft 桌面端，Go 实现
 
 一个 Go 程序就是整个白板：仓库里的网页界面 `public/` 在编译时**嵌进二进制**，
 由 Go 内置的 HTTP 服务在 `127.0.0.1` 上托管，再用 WebView2 开一个原生窗口。
@@ -13,7 +13,7 @@
 cd desktop
 powershell -ExecutionPolicy Bypass -File .\build.ps1   # 同步网页资源并编译 whitesoft.exe
 .\whitesoft                       # 打开窗口
-.\whitesoft --port 9000           # 指定端口，默认 8787，被占用时自动顺延
+.\whitesoft --port 9000           # 指定端口，默认 8787，不可用时自动顺延
 .\whitesoft serve                 # 只起本地服务，用浏览器打开打印出的地址
 .\whitesoft --debug               # 打开开发者工具
 .\whitesoft --version             # 版本与 WebView2 版本

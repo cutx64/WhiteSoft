@@ -1,4 +1,4 @@
-# WhiteSoft
+﻿# WhiteSoft
 
 **在浏览器里运行的本地白板，可以导入 PDF，读写 Microsoft Whiteboard 的 `.note` 文件。**
 
@@ -118,7 +118,7 @@ PDF 渲染与 ZIP 打包所需的第三方库都已放在 `public/vendor/`，离
 cd desktop
 powershell -ExecutionPolicy Bypass -File .\build.ps1   # 同步网页界面并编译 whitesoft.exe
 .\whitesoft                      # 打开桌面窗口
-.\whitesoft --port 9000          # 指定端口，默认 8787，被占用时自动顺延
+.\whitesoft --port 9000          # 指定端口，默认 8787，不可用时自动顺延
 .\whitesoft serve                # 只起本地服务，用浏览器打开打印出的地址
 .\whitesoft --debug              # 打开开发者工具，排查界面问题
 ```
@@ -164,13 +164,28 @@ PDF 导入、公式、自动保存等行为都和浏览器里一模一样。
 
 | 选项 | 说明 |
 |---|---|
-| `--port <n>` | 端口，默认 `8787`，与 `whitesoft.sh` 一致；被占用时自动顺延，指定后严格使用 |
+| `--port <n>` | 端口，默认 `8787`，与 `whitesoft.sh` 一致；不可用时自动顺延，指定后严格使用 |
 | `--host <addr>` | 监听地址，默认 `127.0.0.1`；改成 `0.0.0.0` 会让同网段的机器也能访问 |
 | `--width` / `--height` | 窗口初始尺寸，默认 `1440 × 900` |
 | `serve` | 子命令：不开窗口，只起本地服务并打印地址 |
 | `--no-window` | 同上，`serve` 的等价写法 |
 | `--data-dir <路径>` | 指定 WebView2 数据目录，默认自动挑选可写的位置 |
 | `--debug` | 打开开发者工具与右键菜单 |
+
+端口是这样挑的：先试 `8787`，被占用就往后顺延，试满 `8787` 到 `8836` 共 50 个；
+整段都不可用时换到 `9000` 到 `9049`；再不行就让系统分配一个，窗口总能打开。
+换了端口时，状态栏和控制台会写明原因。
+
+Windows 上有个容易踩的坑：Hyper-V、WSL、Docker 会在开机时**保留一整段端口**，
+落在保留段里的端口不是「被占用」，而是被系统直接拒绝，
+所以会出现「明明没人用 8787，程序却说全都占用了」。用
+
+```powershell
+netsh interface ipv4 show excludedportrange protocol=tcp
+```
+
+可以看到这些保留段。它们每次开机都可能变化，所以程序不假设哪一段一定可用，
+而是按上面那样一路退让，最后交给系统分配。
 | `--version` | 显示版本与 WebView2 版本 |
 
 `.note` 的读写仍然全部在界面里对着你自己的文件完成；这个内置服务只发送静态字节，

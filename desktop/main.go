@@ -1,4 +1,4 @@
-// Command whitesoft is the WhiteSoft desktop app.
+﻿// Command whitesoft is the WhiteSoft desktop app.
 //
 // It is the whole whiteboard in one binary: the web client that the repository
 // hosts in `public/` is embedded, served from an in-process loopback HTTP
@@ -106,7 +106,7 @@ func parseFlags(args []string) (options, error) {
 		fmt.Fprint(os.Stderr, "用法：\n  whitesoft                打开桌面窗口\n  whitesoft serve          只起本地服务，用浏览器访问\n\n选项：\n")
 		fs.PrintDefaults()
 	}
-	fs.IntVar(&opts.port, "port", 0, "监听端口，默认 8787，被占用时自动顺延；指定后严格使用")
+	fs.IntVar(&opts.port, "port", 0, "监听端口，默认 8787，被占用或被系统保留时自动顺延；指定后严格使用")
 	fs.StringVar(&opts.host, "host", "127.0.0.1", "监听地址；改成 0.0.0.0 会暴露到局域网")
 	fs.IntVar(&opts.width, "width", 1440, "窗口宽度（像素）")
 	fs.IntVar(&opts.height, "height", 900, "窗口高度（像素）")
