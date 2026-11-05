@@ -8,6 +8,7 @@ import { Workspace, DocTab } from './workspace.js';
 import { UI } from './ui.js';
 import { InlineEditor } from './inlineeditor.js';
 import { SceneRenderer } from './render.js';
+import { encodePng } from './pngexport.js';
 import { Rect } from './geometry.js';
 import { scaleElement, rotateElement } from './elements.js';
 import {
@@ -1149,45 +1150,122 @@ class App {
   }
 
   /* ---- rendering a page to a bitmap for PNG and PDF export ---- */
-  async renderPageBitmap(index, scale = 2) {
-    const ed = this.editor;
-    const page = ed.doc.pages[index];
-    if (!page) return null;
-    const b = pageBounds(ed, page);
-    const pad = 24;
-    const w = Math.ceil((b.w + pad * 2) * scale);
-    const h = Math.ceil((b.h + pad * 2) * scale);
-    if (w < 1 || h < 1 || w * h > 80e6) throw new Error('页面过大，无法导出');
-    const canvas = document.createElement('canvas');
-    canvas.width = w; canvas.height = h;
-    const renderer = new SceneRenderer(canvas);
-    const camera = { x: b.x - pad, y: b.y - pad, zoom: scale };
-    let pdfPages = page.pdfPages.map((p) => ({ ...p }));
-    if (pdfPages.length && ed.pdf.isOpen) {
-      pdfPages = await ed.pdf.bitmapsFor(pdfPages, scale, 1);
-    }
-    renderer.render({
-      page, camera, view: { w: w / scale, h: h / scale }, dpr: 1, version: Math.random(),
+  /**
+   * Options for painting one rectangle of a page.
+   *
+   * The renderer's `view` is in device pixels and `camera.zoom` is the scale
+   * from world units to those pixels; its `dpr` stays 1 for an export, since
+   * the canvas being drawn into is already the output bitmap.  Passing the view
+   * in world units instead — which this used to do — makes the renderer size
+   * the canvas to the world rectangle and draw the page at the export scale
+   * inside it, so everything past the first 1/scale of the page was cut off.
+   */
+  #pagePaintOptions(ed, page, b, pad, scale, pdfPages) {
+    return {
+      page,
+      dpr: 1,
       images: ed.resources.images,
       backgroundColor: argbToRgba(ed.doc.backgroundColor || '#FFFFFFFF'),
       background: { ...ed.background, _zoom: scale },
       pdfPages,
       live: null,
       overlay: null,
+      camera: { x: b.x - pad, y: b.y - pad, zoom: scale },
+      scale,
+    };
+  }
+
+  /** PDF bitmaps for a page, rendered at the export scale once per export. */
+  async #pagePdfPages(ed, page, scale) {
+    const pdfPages = (page.pdfPages || []).map((p) => ({ ...p }));
+    if (!pdfPages.length || !ed.pdf.isOpen) return pdfPages;
+    // The backdrop is rasterised once for the whole page, so on a large export
+    // it would be enormous on its own; it is capped and stretched instead,
+    // which costs a little sharpness and keeps the export possible.
+    let widest = 1;
+    for (const p of pdfPages) widest = Math.max(widest, Rect.parse(p.bounds).w || 1);
+    const zoom = Math.min(scale, 8192 / widest);
+    return ed.pdf.bitmapsFor(pdfPages, zoom, 1);
+  }
+
+  async renderPageBitmap(index, scale = 2) {
+    const ed = this.editor;
+    const page = ed.doc.pages[index];
+    if (!page) return null;
+    const b = pageBounds(ed, page);
+    const pad = 24;
+    // A single canvas cannot be arbitrarily large, so the scale gives way
+    // instead of the export failing.  The tiled PNG writer has no such limit.
+    const maxSide = 16384;
+    const maxPixels = 64e6;
+    let s = scale;
+    s = Math.min(s, maxSide / Math.max(b.w + pad * 2, 1), maxSide / Math.max(b.h + pad * 2, 1));
+    s = Math.min(s, Math.sqrt(maxPixels / Math.max((b.w + pad * 2) * (b.h + pad * 2), 1)));
+    s = Math.max(s, 0.05);
+    const w = Math.max(1, Math.ceil((b.w + pad * 2) * s));
+    const h = Math.max(1, Math.ceil((b.h + pad * 2) * s));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const renderer = new SceneRenderer(canvas);
+    const opts = this.#pagePaintOptions(ed, page, b, pad, s, await this.#pagePdfPages(ed, page, s));
+    renderer.render({
+      ...opts,
+      view: { w, h },
+      version: Math.random(),
     });
     return canvas;
   }
 
   async exportPng() {
     const ui = this.ui;
+    const ed = this.editor;
+    const index = ed.pageIndex;
+    const page = ed.doc.pages[index];
+    if (!page) return;
     try {
       ui.progress('正在导出 PNG …');
-      const canvas = await this.renderPageBitmap(this.editor.pageIndex, 2);
-      canvas.toBlob((blob) => {
-        download(blob, `${this.editor.doc.name}-p${this.editor.pageIndex + 1}.png`, 'image/png');
-        ui.progress('');
-        ui.toast('PNG 已导出', 'ok');
-      }, 'image/png');
+      const b = pageBounds(ed, page);
+      const pad = 24;
+      const worldW = b.w + pad * 2;
+      const worldH = b.h + pad * 2;
+      // Exported at 2 device pixels per world unit, which is what the old
+      // fixed-scale export did, and backed off only when the file would get
+      // unreasonable.  Everything is painted in tiles, so the canvas limit
+      // stops mattering; the bounds below are about memory and viewer support.
+      const maxSide = 16384;
+      const maxPixels = 240e6;
+      let scale = 2;
+      scale = Math.min(scale, maxSide / Math.max(worldW, 1), maxSide / Math.max(worldH, 1));
+      scale = Math.min(scale, Math.sqrt(maxPixels / Math.max(worldW * worldH, 1)));
+      scale = Math.max(scale, 0.05);
+      const width = Math.max(1, Math.ceil(worldW * scale));
+      const height = Math.max(1, Math.ceil(worldH * scale));
+      const pdfPages = await this.#pagePdfPages(ed, page, scale);
+      const opts = this.#pagePaintOptions(ed, page, b, pad, scale, pdfPages);
+
+      const canvas = document.createElement('canvas');
+      const renderer = new SceneRenderer(canvas);
+      const paint = async (sx, sy, sw, sh) => {
+        canvas.width = sw;
+        canvas.height = sh;
+        renderer.render({
+          ...opts,
+          camera: { x: opts.camera.x + sx / scale, y: opts.camera.y + sy / scale, zoom: scale },
+          view: { w: sw, h: sh },
+          version: Math.random(),
+        });
+        return canvas;
+      };
+
+      const blob = await encodePng({
+        width,
+        height,
+        paint,
+        onProgress: (done, total) => ui.progress(`正在导出 PNG … ${Math.round((done / total) * 100)}%`),
+      });
+      download(blob, `${ed.doc.name}-p${index + 1}.png`, 'image/png');
+      ui.progress('');
+      ui.toast(`PNG 已导出 · ${width} × ${height}`, 'ok');
     } catch (err) {
       ui.progress('');
       ui.toast('导出失败：' + err.message, 'error');
