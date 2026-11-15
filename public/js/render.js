@@ -980,15 +980,40 @@ export class SceneRenderer {
       const t0 = performance.now();
       const c = this.cacheCtx;
       const k2 = this.cacheScaleUsed;
+      // The box is snapped to whole raster pixels.  Cutting it at a fractional
+      // coordinate leaves a half-covered row along the boundary: the fill and
+      // the clip each cover part of it, and the result is a faint line across
+      // the page where the patch ends.
+      const cx0 = Math.floor((area.x - this.cacheRect.x) * k2);
+      const cy0 = Math.floor((area.y - this.cacheRect.y) * k2);
+      const cx1 = Math.ceil((area.right - this.cacheRect.x) * k2);
+      const cy1 = Math.ceil((area.bottom - this.cacheRect.y) * k2);
+      const bw = cx1 - cx0;
+      const bh = cy1 - cy0;
       c.save();
       c.setTransform(1, 0, 0, 1, 0, 0);
-      const cx = (area.x - this.cacheRect.x) * k2;
-      const cy = (area.y - this.cacheRect.y) * k2;
-      c.clearRect(cx, cy, area.w * k2, area.h * k2);
+      c.clearRect(cx0, cy0, bw, bh);
       c.beginPath();
-      c.rect(cx, cy, area.w * k2, area.h * k2);
+      c.rect(cx0, cy0, bw, bh);
       c.clip();
       c.setTransform(k2, 0, 0, k2, -this.cacheRect.x * k2, -this.cacheRect.y * k2);
+      // The raster carries the page colour, the background pattern and the PDF
+      // backdrop underneath the elements, so the cleared box has to be painted
+      // with them again.  Leaving them out is what used to turn the box into a
+      // hole: the cache went transparent there, the canvas colour showed
+      // through, and the page had a blank rectangle across its background until
+      // something else forced a full rebuild.
+      //
+      // It is painted half a raster pixel past the box on every side and cut
+      // back by the clip: the pattern is made of stroked lines, and a line that
+      // ends exactly on the box edge gets an antialiased cap there, while the
+      // same line across the whole cache does not.
+      const grow = 0.5 / k2;
+      const world = new Rect(
+        this.cacheRect.x + cx0 / k2 - grow, this.cacheRect.y + cy0 / k2 - grow,
+        bw / k2 + grow * 2, bh / k2 + grow * 2,
+      );
+      this.#paintBackdrop(c, world, s);
       const env = {
         images: s.images, zoom: s.camera.zoom, dpr, pathCache: this.pathCache,
         scale: this.cacheScaleUsed, editing: s.editing || null,
@@ -998,7 +1023,7 @@ export class SceneRenderer {
       // a stroke paints up to half its width outside the bounds an element
       // reports, and an element just outside the cleared box would otherwise
       // lose the sliver that reaches into it.
-      const reach = area.expand(MAX_STROKE_REACH);
+      const reach = world.expand(MAX_STROKE_REACH);
       for (const e of s.page.elements) {
         if (elementBounds(e).intersects(reach)) drawElement(c, e, env);
       }
@@ -1034,28 +1059,8 @@ export class SceneRenderer {
     c.clearRect(0, 0, cw, ch);
     c.setTransform(usedScale, 0, 0, usedScale, -want.x * usedScale, -want.y * usedScale);
 
-    // page colour
-    c.fillStyle = s.backgroundColor || '#FFFFFF';
-    c.fillRect(want.x, want.y, want.w, want.h);
-
-    // tiled background pattern
-    drawGridBackground(c, want, s.background);
-
-    // PDF backdrop
-    for (const pp of s.pdfPages || []) {
-      const b = Rect.parse(pp.bounds);
-      if (pp.bitmap) {
-        c.imageSmoothingEnabled = true;
-        c.imageSmoothingQuality = 'low';
-        c.drawImage(pp.bitmap, b.x, b.y, b.w, b.h);
-      } else {
-        c.fillStyle = '#FFFFFF';
-        c.fillRect(b.x, b.y, b.w, b.h);
-        c.strokeStyle = 'rgba(0,0,0,0.12)';
-        c.lineWidth = 1 / s.camera.zoom;
-        c.strokeRect(b.x, b.y, b.w, b.h);
-      }
-    }
+    // page colour, background pattern and PDF backdrop
+    this.#paintBackdrop(c, want, s);
 
     // elements
     const env = {
@@ -1076,6 +1081,34 @@ export class SceneRenderer {
     this.needsRebuild = false;
     this.lastStats.rebuildMs = performance.now() - t0;
     return true;
+  }
+
+  /**
+   * Everything in the raster that lies under the elements: the page colour, the
+   * tiled background pattern and the PDF backdrop, painted over one world rect.
+   *
+   * Both the full rebuild and the in-place patch go through here, because a
+   * patch that cleared the box without putting these back would leave a hole in
+   * the raster — a blank rectangle where the page background should be.
+   */
+  #paintBackdrop(c, area, s) {
+    c.fillStyle = s.backgroundColor || '#FFFFFF';
+    c.fillRect(area.x, area.y, area.w, area.h);
+    drawGridBackground(c, area, s.background);
+    for (const pp of s.pdfPages || []) {
+      const b = Rect.parse(pp.bounds);
+      if (pp.bitmap) {
+        c.imageSmoothingEnabled = true;
+        c.imageSmoothingQuality = 'low';
+        c.drawImage(pp.bitmap, b.x, b.y, b.w, b.h);
+      } else {
+        c.fillStyle = '#FFFFFF';
+        c.fillRect(b.x, b.y, b.w, b.h);
+        c.strokeStyle = 'rgba(0,0,0,0.12)';
+        c.lineWidth = 1 / s.camera.zoom;
+        c.strokeRect(b.x, b.y, b.w, b.h);
+      }
+    }
   }
 }
 
