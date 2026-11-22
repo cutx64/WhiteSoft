@@ -1090,14 +1090,41 @@ class App {
     this.syncWorkspace();
   }
 
-  /** Reactivate the PDF layer of the board that was just switched to. */
+  /**
+   * Reactivate the PDF layer of the board that was just switched to.
+   *
+   * The swap is announced to the editor first: while it runs, the renderer must
+   * not start a raster against the document that is being destroyed.  A render
+   * asked for on a destroyed document never settles, and the load flag it left
+   * behind kept every later attempt from running — which is how a board that
+   * had been shown first lost its backdrop for good once a second board with a
+   * PDF was opened.
+   */
   #restorePdf(tab) {
     const ed = this.editor;
-    ed.pdf.close().finally(() => {
-      const bytes = tab.doc._pdfBytes;
-      if (!bytes) return;
-      ed.pdf.open(bytes, 'board:' + tab.id).then(() => ed.invalidate()).catch(() => {});
-    });
+    const stillActive = () => this.editor === ed && ed.doc === tab.doc;
+    ed._pdfSwapping = true;
+    ed.pdf.close()
+      .then(() => {
+        const bytes = tab.doc._pdfBytes;
+        if (!bytes || !stillActive()) return null;
+        return ed.pdf.open(bytes, 'board:' + tab.id);
+      })
+      .then((opened) => {
+        ed._pdfSwapping = false;
+        if (!stillActive()) return;
+        if (opened) {
+          ed._pdfPages = null;
+          ed._pdfKey = null;
+        }
+        ed.invalidate();
+        ed.syncPdf();
+        ed.requestRender();
+      })
+      .catch(() => {
+        ed._pdfSwapping = false;
+        if (stillActive()) { ed.invalidate(); ed.requestRender(); }
+      });
   }
 
   /** Close a tab, asking first when it holds unsaved work. */

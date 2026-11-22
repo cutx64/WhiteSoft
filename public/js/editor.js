@@ -83,6 +83,8 @@ export class Editor {
     this._renderScheduled = false;
     this._pdfKey = null;
     this._loadingPdf = false;
+    this._loadingSince = 0;
+    this._pdfSwapping = false;
     this.pointers = new Map();
     this.mode = 'idle';             // idle | draw | pan | pinch | handle
     this.onChange = null;
@@ -134,6 +136,7 @@ export class Editor {
     this._pdfPages = null;
     this._pdfKey = null;
     this._loadingPdf = false;
+    this._loadingSince = 0;
     this._pdfKeyPending = null;
     // Whatever the renderer cached belongs to the document that was just closed.
     this.renderer?.invalidate?.();
@@ -289,6 +292,17 @@ export class Editor {
    * PDF backdrop
    * ---------------------------------------------------------------- */
   syncPdf() {
+    // The backdrop is being swapped for another document: starting a raster
+    // against the document that is on its way out is what left the layer blank,
+    // because a render on a destroyed document never settles and the "loading"
+    // flag then blocked every later attempt.
+    if (this._pdfSwapping) return;
+    // A raster that never comes back would hold that flag forever, so it is
+    // dropped once it is clearly not coming.
+    if (this._loadingPdf && this._loadingSince && performance.now() - this._loadingSince > 5000) {
+      this._loadingPdf = false;
+      this._pdfKey = null;
+    }
     const pages = this.page.pdfPages;
     if (!pages || !pages.length || !this.pdf.isOpen) { this._pdfPages = null; return; }
     // Whole-octave buckets: re-rasterising a PDF page is expensive, so only do
@@ -297,6 +311,7 @@ export class Editor {
     if (this._pdfKey === key) return;
     if (this._loadingPdf) { this._pdfKeyPending = key; return; }
     this._loadingPdf = true;
+    this._loadingSince = performance.now();
     // Rasterising is asynchronous: if the user switches board in the meantime,
     // this result belongs to a document that is gone and must never be painted
     // onto the new one.
@@ -1142,6 +1157,32 @@ export class Editor {
   }
 
   #onPointerMove(ev) {
+    // A fast drag is delivered as one pointermove per frame: the browser folds
+    // every sample it could not deliver in time into that event.  Drawing the
+    // frame-aligned positions alone leaves the line between two of them as a
+    // straight facet, which is exactly the polygon look a quick stroke gets.
+    // `getCoalescedEvents` hands the folded samples back, so they all reach the
+    // tool and the curve keeps the shape the pointer actually took.
+    if (this.mode === 'draw' && typeof ev.getCoalescedEvents === 'function') {
+      const burst = ev.getCoalescedEvents();
+      if (burst && burst.length) {
+        // Only the last sample of the burst is drawn, so the live preview is
+        // rebuilt once, at the end: rebuilding it for every folded sample is
+        // copying a whole stroke several times per frame for nothing.
+        this._bursting = true;
+        try {
+          for (const sub of burst) {
+            if (sub !== ev) this.#pointerMoved(sub);
+          }
+        } finally {
+          this._bursting = false;
+        }
+      }
+    }
+    this.#pointerMoved(ev);
+  }
+
+  #pointerMoved(ev) {
     const sp = this.#localPoint(ev);
     if (!this.pointers.has(ev.pointerId) && this.mode === 'idle') {
       this.currentTool?.hover?.(this, screenToWorld(this.camera, sp.x, sp.y), ev, sp);

@@ -106,6 +106,15 @@ function makePenTool(kind) {
     cursor: 'crosshair',
     _pts: null,
     /**
+     * A preview update was skipped because its sample belonged to a burst.
+     *
+     * The browser repeats the last position in every burst, so the sample that
+     * ends the burst is usually a duplicate and adds no point; without this the
+     * preview would never be built while the pen is down and the stroke would
+     * appear only when it is lifted.
+     */
+    _liveStale: false,
+    /**
      * Should this drag be flattened towards horizontal when it nearly is?
      * Shift is the escape hatch: it draws the angle the pointer made.
      */
@@ -120,13 +129,19 @@ function makePenTool(kind) {
       this._lineMode = ed.ruler.active || (kind === 'highlighter' && !!ed.highlighter.straight);
       this._shiftStraight = false;
       this._shiftSeen = false;
+      this._liveStale = false;
     },
     move(ed, p, ev) {
       if (!this._pts) return;
       if (ev.shiftKey) this._shiftSeen = true;
       const last = this._pts[this._pts.length - 1];
       const q = snapPoint(ed, { x: p.x, y: p.y, pr: pressure(ev) });
-      if (!this._lineMode && Math.hypot(q.x - last.x, q.y - last.y) < MIN_DRAW_DIST / ed.camera.zoom) return;
+      if (!this._lineMode && Math.hypot(q.x - last.x, q.y - last.y) < MIN_DRAW_DIST / ed.camera.zoom) {
+        // A sample that adds nothing still ends the burst it arrived in, so the
+        // preview built from the points collected inside it has to land now.
+        if (this._liveStale) this._update(ed);
+        return;
+      }
       if (this._lineMode || ev.shiftKey) {
         this._pts = [this._pts[0], this._flatten(ed, ev, q)];
         this._shiftStraight = true;
@@ -177,12 +192,18 @@ function makePenTool(kind) {
       ed.addElement(final, { label: kind === 'pen' ? '书写' : '高亮' });
       this._pts = null;
       this._shiftStraight = false;
+      this._liveStale = false;
     },
     cancel(ed) {
       this._pts = null; this._shiftStraight = false; this._lineMode = false; this._shiftSeen = false;
+      this._liveStale = false;
       ed.live = null;
     },
     _update(ed) {
+      // A burst of folded samples is consumed at once and only its last sample
+      // reaches the screen, so the preview is rebuilt once the burst is over.
+      if (ed._bursting) { this._liveStale = true; return; }
+      this._liveStale = false;
       const cfg = kind === 'pen' ? ed.pen : ed.highlighter;
       const width = strokeWidthFor(ed, kind, cfg);
       const stroke = withOpacity(cfg.color, cfg.opacity);
