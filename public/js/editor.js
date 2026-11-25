@@ -21,6 +21,15 @@ export const MAX_ZOOM = 32;
 /** The zoom every board starts at, and the value the view resets to. */
 export const DEFAULT_ZOOM = 0.8;
 
+/**
+ * Tools a locked board still hands out.
+ *
+ * They read the board instead of writing to it: selecting and the marquee to
+ * copy something out of it, panning to move around, the laser to point at it
+ * while talking.  Everything else would add or change content.
+ */
+const READ_ONLY_TOOLS = new Set(['select', 'marquee', 'pan', 'laser']);
+
 export class Editor {
   constructor(canvas, host) {
     this.canvas = canvas;
@@ -87,6 +96,13 @@ export class Editor {
     this._pdfSwapping = false;
     this.pointers = new Map();
     this.mode = 'idle';             // idle | draw | pan | pinch | handle
+    /**
+     * The board is on show, not on the table: it scrolls, zooms, selects and
+     * lights up with the laser, and every operation that would change it is
+     * refused by `blockedByLock()`.
+     */
+    this.locked = false;
+    this.onLockedAction = null;
     this.onChange = null;
     this.onContentChange = null;
     this.onSelectionChange = null;
@@ -583,7 +599,23 @@ export class Editor {
   nextPage() { this.gotoPage(this.pageIndex + 1); }
   prevPage() { this.gotoPage(this.pageIndex - 1); }
 
+  /**
+   * Refuse a change because the board is locked.
+   *
+   * Every operation that would alter the board asks here first, so locking
+   * means one thing everywhere — the pen, the keyboard, the action bar, the
+   * menus and the page list all land on the same answer.  Anything that only
+   * moves the view or the pointer, such as panning, zooming, selecting and the
+   * laser, keeps working, which is the point of locking a board for reading.
+   */
+  blockedByLock() {
+    if (!this.locked) return false;
+    this.onLockedAction?.();
+    return true;
+  }
+
   addPage(after = this.pageIndex) {
+    if (this.blockedByLock()) return;
     const p = createPage({ scale: 1 });
     this.doc.pages.splice(after + 1, 0, p);
     this.history.push('添加画纸',
@@ -596,6 +628,7 @@ export class Editor {
 
   /** Insert a blank page immediately before the current one. */
   addPageBefore(index = this.pageIndex) {
+    if (this.blockedByLock()) return;
     const at = Math.max(0, index);
     const p = createPage({ scale: 1 });
     this.doc.pages.splice(at, 0, p);
@@ -609,6 +642,7 @@ export class Editor {
 
   /** Insert a blank page immediately after the current one. */
   addPageAfter(index = this.pageIndex) {
+    if (this.blockedByLock()) return;
     const at = Math.min(this.pageCount, index + 1);
     const p = createPage({ scale: 1 });
     this.doc.pages.splice(at, 0, p);
@@ -621,6 +655,7 @@ export class Editor {
   }
 
   duplicatePage(index = this.pageIndex) {
+    if (this.blockedByLock()) return;
     const copy = JSON.parse(JSON.stringify(this.doc.pages[index]));
     this.doc.pages.splice(index + 1, 0, copy);
     this.history.push('复制画纸',
@@ -633,6 +668,7 @@ export class Editor {
 
   deletePage(index = this.pageIndex) {
     if (this.pageCount <= 1) return;
+    if (this.blockedByLock()) return;
     const [removed] = this.doc.pages.splice(index, 1);
     this.history.push('删除画纸',
       () => { this.doc.pages.splice(index, 0, removed); this.gotoPage(index, { fit: false }); },
@@ -644,6 +680,7 @@ export class Editor {
 
   movePage(from, to) {
     if (from === to) return;
+    if (this.blockedByLock()) return;
     const [p] = this.doc.pages.splice(from, 1);
     this.doc.pages.splice(to, 0, p);
     this.history.push('移动画纸', () => this.movePage(to, from), () => this.movePage(from, to));
@@ -656,6 +693,7 @@ export class Editor {
    * Elements
    * ---------------------------------------------------------------- */
   addElement(e, { select = false, record = true, label = '添加' } = {}) {
+    if (this.blockedByLock()) return null;
     this.page.elements.push(e);
     // A new element only changes its own box, so the box is handed to the
     // history push as well: that push asks for a repaint on its own, before the
@@ -705,6 +743,7 @@ export class Editor {
   }
 
   removeElements(list, label = '删除') {
+    if (this.blockedByLock()) return;
     const items = list.filter((e) => this.page.elements.includes(e));
     if (!items.length) return;
 
@@ -747,6 +786,7 @@ export class Editor {
    * coordinates so it lands in the same place on the target page.
    */
   copySelectionToPage(target, { move = false } = {}) {
+    if (this.blockedByLock()) return 0;
     target = clamp(target, 0, this.pageCount - 1);
     if (target === this.pageIndex) return 0;
     const items = clone([...this.selection]);
@@ -798,6 +838,7 @@ export class Editor {
    */
   applySelectionColor(argb, { snapshot = true } = {}) {
     if (!this.selection.size) return 0;
+    if (this.blockedByLock()) return 0;
     const before = snapshot ? this.snapshot() : null;
     let n = 0;
     for (const e of this.selection) if (tintElement(e, argb)) n++;
@@ -841,6 +882,13 @@ export class Editor {
 
   /** Push a history entry that restores a snapshot taken before an edit. */
   commitSnapshot(before, label) {
+    // The last line of defence: a caller that skipped its own check still must
+    // not leave a mark, so the page is put back exactly as it was.
+    if (this.locked) {
+      this.restore(before);
+      this.blockedByLock();
+      return;
+    }
     const after = this.snapshot();
     this.history.push(label,
       () => { this.restore(before); },
@@ -927,6 +975,7 @@ export class Editor {
 
   /* ---- z-order ---- */
   reorderSelection(mode) {
+    if (this.blockedByLock()) return;
     const list = this.page.elements;
     const sel = list.filter((e) => this.selection.has(e));
     if (!sel.length) return;
@@ -959,6 +1008,9 @@ export class Editor {
   /* ---- clipboard ---- */
   copySelection(cut = false) {
     if (!this.selection.size) return;
+    // Copying a locked board is fine and useful — it is how a page of notes is
+    // quoted somewhere else — but cutting takes the objects away.
+    if (cut && this.blockedByLock()) return;
     this.clipboard = { elements: clone([...this.selection]), files: new Map() };
     for (const e of this.clipboard.elements) {
       if (e.fileName && this.resources.isNew(e.fileName)) this.clipboard.files.set(e.fileName, this.resources.local.get(e.fileName).blob);
@@ -968,6 +1020,7 @@ export class Editor {
 
   paste(offset = 16) {
     if (!this.clipboard || !this.clipboard.elements.length) return;
+    if (this.blockedByLock()) return;
     const d = offset / this.camera.zoom;
     const copies = [];
     for (const src of clone(this.clipboard.elements)) {
@@ -1002,6 +1055,7 @@ export class Editor {
   /* ---- transforms on the current selection ---- */
   nudgeSelection(dx, dy) {
     if (!this.selection.size) return;
+    if (this.blockedByLock()) return;
     const before = this.snapshot();
     for (const e of this.selection) translateElement(e, dx, dy);
     this.commitSnapshot(before, '移动');
@@ -1080,6 +1134,9 @@ export class Editor {
 
   setTool(name) {
     if (name === this.tool) return;
+    // A locked board only lends the tools that read it: selecting, the marquee,
+    // panning and the laser.  Everything else would leave a mark.
+    if (this.locked && !READ_ONLY_TOOLS.has(name)) { this.blockedByLock(); return; }
     this.currentTool?.cancel?.(this);
     this.prevTool = this.tool;
     this.tool = name;
@@ -1520,6 +1577,7 @@ export class Editor {
   /** Open the inline DOM editor for a text box, sticky note or table. */
   editElement(e, opts = {}) {
     if (!this.inline) return;
+    if (this.blockedByLock()) return;
     this.inline.onCommit = (target, info) => {
       if (info.changed) return;
       // A brand-new, still-empty object is discarded instead of left behind.

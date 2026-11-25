@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Application entry point: wires the editor, the UI and all document-level
  * commands: open, save, import PDF, insert image and export.
  */
@@ -181,6 +181,9 @@ class App {
   async autoSaveNow() {
     if (!this.autoSaveMinutes || this.saving) return false;
     if (!this.modified) return false;
+    // A locked board cannot gain changes, and a lock chosen with "直接锁定"
+    // deliberately left the pending ones unwritten.
+    if (this.editor.locked) return false;
     if (!this.#writableHandle()) return false;
     return this.save({ auto: true, keepEditing: true });
   }
@@ -225,6 +228,9 @@ class App {
    * Global wiring
    * ---------------------------------------------------------------- */
   bindGlobal() {
+    this.editor.onLockedAction = () => {
+      this.ui.toast('这个文件已锁定，先按页面栏右侧的「锁定」解除', 'warn', 2600);
+    };
     this.editor.onContentChange = () => {
       const wasClean = !this.modified;
       this.markModified();
@@ -354,6 +360,7 @@ class App {
         e.preventDefault();
         if (e.altKey) {
           // Alt + ←/→ rotates the selection, like Whiteboard.
+          if (ed.blockedByLock()) return;
           const before = ed.snapshot();
           const rad = (e.key === 'ArrowLeft' ? -1 : 1) * (e.shiftKey ? Math.PI / 2 : Math.PI / 36);
           const c = ed.selectionBounds();
@@ -1323,8 +1330,82 @@ class App {
     }
   }
 
-  undo() { const l = this.editor.history.undo(); if (l) this.ui.toast('撤销：' + l, 'info', 1200); this.ui.syncStatus(); }
-  redo() { const l = this.editor.history.redo(); if (l) this.ui.toast('重做：' + l, 'info', 1200); this.ui.syncStatus(); }
+  undo() {
+    if (this.editor.blockedByLock()) return;
+    const l = this.editor.history.undo();
+    if (l) this.ui.toast('撤销：' + l, 'info', 1200);
+    this.ui.syncStatus();
+  }
+
+  redo() {
+    if (this.editor.blockedByLock()) return;
+    const l = this.editor.history.redo();
+    if (l) this.ui.toast('重做：' + l, 'info', 1200);
+    this.ui.syncStatus();
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Lock
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Turn the lock on or off for the board on screen.
+   *
+   * Locking a board that already has unsaved changes asks first, because from
+   * that point nothing can be changed until it is unlocked again: 保存并锁定
+   * writes the file, 直接锁定 keeps the changes in memory and leaves the tab
+   * marked as unsaved, 取消 leaves everything as it was.
+   */
+  async toggleDocumentLock() {
+    const tab = this.workspace.active;
+    if (!tab) return;
+    const ui = this.ui;
+    if (tab.locked) {
+      tab.locked = false;
+      this.editor.locked = false;
+      ui.toast('已解除锁定，可以继续修改', 'ok', 2000);
+      this.syncWorkspace();
+      return;
+    }
+    if (tab.dirty) {
+      const answer = await this.#askSaveBeforeLock();
+      if (answer === 'cancel') return;
+      if (answer === 'save' && !(await this.save())) return;
+    }
+    tab.locked = true;
+    this.editor.locked = true;
+    this.editor.currentTool?.cancel?.(this.editor);
+    this.editor.setTool('select');
+    // Nothing new can arrive now, so a countdown that was running has nothing
+    // left to write.
+    this.autoSaveDeadline = null;
+    ui.toast('已锁定：这个文件现在只能看，再按一次「锁定」解除', 'ok', 3000);
+    this.syncWorkspace();
+  }
+
+  /** The question asked before locking a board with unsaved changes. */
+  #askSaveBeforeLock() {
+    const name = this.editor.doc.name || '未命名白板';
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (v) => { if (settled) return; settled = true; dlg.close(); resolve(v); };
+      const dlg = this.ui.dialog('锁定前保存？', el('div', {},
+        el('p', { class: 'wb-hint', text: `白板「${name}」有未保存的更改。锁定之后就无法再修改，要先保存吗？` }),
+        el('p', {
+          class: 'wb-hint',
+          text: this.editor.doc.fileHandle?.name
+            ? `当前文件：${this.editor.doc.fileHandle.name}`
+            : (this.editor.doc.localFile ? `当前文件：${this.editor.doc.localFile.name}` : '这个白板还没有保存到文件。'),
+        }),
+      ), {
+        actions: [
+          el('button', { class: 'wb-toggle', type: 'button', text: '取消', onclick: () => finish('cancel') }),
+          el('button', { class: 'wb-toggle', type: 'button', text: '直接锁定', onclick: () => finish('lock') }),
+          el('button', { class: 'wb-primary', type: 'button', text: '保存并锁定', onclick: () => finish('save') }),
+        ],
+      });
+    });
+  }
 
   /* ---------------------------------------------------------------- *
    * Object commands
@@ -1547,6 +1628,7 @@ class App {
   clearPage() {
     const ed = this.editor;
     if (!ed.page.elements.length) return;
+    if (ed.blockedByLock()) return;
     const before = ed.snapshot();
     ed.page.elements = [];
     ed.selection.clear();

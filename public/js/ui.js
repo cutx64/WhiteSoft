@@ -102,7 +102,18 @@ export class UI {
     /* ---- menu bar ---- */
     this.titleInput = el('input', {
       class: 'wb-title', value: app.editor.doc.name, spellcheck: 'false',
-      onchange: (e) => { app.editor.doc.name = e.target.value || '未命名白板'; app.workspace?.touch(); },
+      onchange: (e) => {
+        const doc = app.editor.doc;
+        const next = e.target.value || '未命名白板';
+        // The name is part of the file, so renaming is editing like any other.
+        if (app.editor.locked && next !== doc.name) {
+          e.target.value = doc.name;
+          app.editor.blockedByLock();
+          return;
+        }
+        doc.name = next;
+        app.workspace?.touch();
+      },
     });
     this.saveState = el('span', { class: 'wb-savestate', text: '' });
 
@@ -581,6 +592,17 @@ export class UI {
     this.tabstrip.append(el('button', {
       class: 'wb-tab-new', type: 'button', text: '+', title: '新建空白白板 · Ctrl+T',
       onclick: () => this.app.newTab(),
+    }));
+    // The lock sits at the far end of the strip, away from the closers: it acts
+    // on the board on screen, and it is the one control up here that is about
+    // the *file* rather than about the tabs.
+    const locked = !!ws.active?.locked;
+    this.tabstrip.append(el('button', {
+      class: 'wb-tab-lock' + (locked ? ' active' : ''),
+      type: 'button',
+      title: locked ? '已锁定 · 再按一次解除' : '锁定 · 锁定后这个文件不能再修改',
+      html: svg(ICONS[locked ? 'lock' : 'unlock'], 15) + `<span>${locked ? '已锁定' : '锁定'}</span>`,
+      onclick: () => this.app.toggleDocumentLock(),
     }));
   }
 
@@ -1399,6 +1421,7 @@ export class UI {
     const apply = (fn) => {
       const list = targets();
       if (!list.length) return;
+      if (ed.blockedByLock()) return;
       const before = ed.snapshot();
       for (const e of list) fn(e);
       ed.commitSnapshot(before, '便签样式');
@@ -1406,6 +1429,7 @@ export class UI {
     const applyLive = (fn) => {
       const list = targets();
       if (!list.length) return;
+      if (ed.blockedByLock()) return;
       if (!pending || pending.elements !== ed.page.elements) {
         pending = { snap: ed.snapshot(), elements: ed.page.elements };
       }
@@ -1872,6 +1896,7 @@ function shapeIcon(kind, opts = {}) {
 
 function applyToSelectionUI(ed, fn) {
   if (!ed.selection.size) return;
+  if (ed.blockedByLock()) return;
   const before = ed.snapshot();
   for (const e of ed.selection) fn(e);
   ed.commitSnapshot(before, '修改样式');

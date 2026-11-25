@@ -254,6 +254,7 @@ export class SelectionBar {
       el('span', { class: 'wb-fieldname', text: label }), control);
 
     const apply = (fn, label) => {
+      if (ed.blockedByLock()) return;
       const before = ed.snapshot();
       for (const e of targets()) fn(e);
       ed.commitSnapshot(before, label);

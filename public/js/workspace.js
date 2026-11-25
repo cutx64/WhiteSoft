@@ -40,6 +40,8 @@ export class DocTab {
     this.tools = null;
     this.dirty = false;
     this.pristine = true;
+    /** Read-only while set: the board still pans and zooms, nothing changes. */
+    this.locked = false;
   }
 
   get name() { return this.doc.name || '未命名白板'; }
@@ -111,6 +113,9 @@ export class Workspace {
   show(tab) {
     const ed = this.editor;
     ed.setDocument(tab.doc, { resources: tab.resources, history: tab.history });
+    // The lock comes back with the tab: a board locked for reading is read-only
+    // every time it is shown, and its tool state cannot pick a pen behind it.
+    ed.locked = !!tab.locked;
     ed.applyToolState(tab.tools);
     if (tab.view) {
       ed.gotoPage(tab.view.pageIndex, { fit: false });
@@ -129,8 +134,12 @@ export class Workspace {
     tab.dirty = false;
     tab.pristine = false;
     tab.view = null;
+    // A different board in the same slot starts with a clean slate: the lock
+    // belonged to the file that just went away.
+    tab.locked = false;
     if (tab.id === this.activeId) {
       this.editor.setDocument(doc, { resources: tab.resources, history: tab.history });
+      this.editor.locked = false;
       tab.history.clear();
     }
     this.onChange?.();

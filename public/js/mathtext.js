@@ -269,6 +269,15 @@ const exprKey = (latex, display) => (display ? 'D|' : 'I|') + latex;
  * The result is cached per typeface, so a box set in STIX 2 keeps its SVG even
  * after another box asks for the TeX engine: the cached string does not depend
  * on which engine happens to be loaded.
+ *
+ * The TeX is handed over inside a group, one pair of braces around the whole
+ * expression.  MathJax turns a bare expression into a *list* of siblings at the
+ * top of the math node, and this build renders only the first of them: `a+b`
+ * comes back as `a`, and the tail of a long formula simply disappears.  A group
+ * makes the whole thing a single child, which renders completely; an expression
+ * that is already one term — `x^2`, `\sum…` — comes out exactly as before, so
+ * wrapping unconditionally is safe.  A group that TeX refuses, which a bare
+ * `\\` outside an environment would be, falls back to the unwrapped form.
  */
 function typeset(latex, display, font) {
   const rec = engineRecord(font);
@@ -286,22 +295,35 @@ function typeset(latex, display, font) {
     if (rec.state === 'idle') ensureMathJax(rec.id).catch(() => {});
     return null;
   }
+
+  /** One conversion; a font range that has to be fetched is passed on. */
+  const convert = (src) => {
+    try {
+      const node = rec.MathJax.tex2svg(src, { display });
+      const svg = node.tagName?.toLowerCase() === 'svg' ? node : node.querySelector('svg');
+      if (!svg) throw new Error('MathJax returned no <svg>');
+      const wEx = parseFloat(svg.getAttribute('width')) || 0;
+      const hEx = parseFloat(svg.getAttribute('height')) || 0;
+      if (!wEx || !hEx) throw new Error('MathJax returned an empty box');
+      const va = /vertical-align:\s*(-?[\d.]+)ex/.exec(svg.getAttribute('style') || '');
+      return {
+        wEx, hEx,
+        dEx: va ? Math.abs(parseFloat(va[1])) : 0,
+        viewBox: svg.getAttribute('viewBox') || `0 0 ${wEx} ${hEx}`,
+        inner: svg.innerHTML,
+        error: false,
+      };
+    } catch (err) {
+      if (err && err.promise) throw err;
+      // Broken TeX never breaks the board: fall back to showing the source.
+      return { error: true, message: String(err?.message || err) };
+    }
+  };
+
   let out;
   try {
-    const node = rec.MathJax.tex2svg(latex, { display });
-    const svg = node.tagName?.toLowerCase() === 'svg' ? node : node.querySelector('svg');
-    if (!svg) throw new Error('MathJax returned no <svg>');
-    const wEx = parseFloat(svg.getAttribute('width')) || 0;
-    const hEx = parseFloat(svg.getAttribute('height')) || 0;
-    if (!wEx || !hEx) throw new Error('MathJax returned an empty box');
-    const va = /vertical-align:\s*(-?[\d.]+)ex/.exec(svg.getAttribute('style') || '');
-    out = {
-      wEx, hEx,
-      dEx: va ? Math.abs(parseFloat(va[1])) : 0,
-      viewBox: svg.getAttribute('viewBox') || `0 0 ${wEx} ${hEx}`,
-      inner: svg.innerHTML,
-      error: false,
-    };
+    out = convert('{' + latex + '}');
+    if (out.error) out = convert(latex);
   } catch (err) {
     // MathJax 4 fetches ranges of a font on demand and signals that with a
     // "retry": it is the engine asking to be called again, not broken TeX.
@@ -316,7 +338,6 @@ function typeset(latex, display, font) {
       }
       out = { error: true, message: '公式字体数据没有加载完整' };
     } else {
-      // Broken TeX never breaks the board: fall back to showing the source.
       out = { error: true, message: String(err?.message || err) };
     }
   }

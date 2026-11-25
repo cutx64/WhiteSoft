@@ -628,6 +628,21 @@ function makeSelectTool(mode) {
 
     down(ed, p, ev, sp) {
       const handle = ed.handleAt(sp);
+      if (ed.locked) {
+        // A locked board can still be read with: clicking selects, and dragging
+        // rubs out a marquee to copy from.  Handles and the inside of a
+        // selection would move or resize it, so they do nothing at all.
+        this._pressHit = this._pick(ed, p, ev) || null;
+        this._moved = false;
+        this._handle = null;
+        this._moving = false;
+        // A real region press, even over an object, so the release settles into
+        // the usual click-or-select and never becomes a move.
+        if (mode === 'lasso') this._lasso = [{ x: p.x, y: p.y }];
+        else this._start = { x: p.x, y: p.y };
+        ed.requestRender();
+        return;
+      }
       if (handle) {
         this._handle = handle;
         this._origins = [...ed.selection].map((e) => clone(e));

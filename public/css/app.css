@@ -147,6 +147,24 @@ button { font-family: inherit; }
   background: transparent; color: var(--ink-3); cursor: pointer; font-size: 16px;
 }
 .wb-tab-new:hover { background: var(--surface-3); color: var(--ink); }
+/* The lock is pinned to the far end of the strip: tabs scroll under it rather
+   than pushing it out of reach, which also keeps it in the same place whatever
+   the number of open boards. */
+.wb-tab-lock {
+  display: inline-flex; align-items: center; gap: 5px;
+  flex: none; margin: 3px 0 3px auto;
+  position: sticky; right: 0; z-index: 2;
+  height: 26px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2); color: var(--ink-2);
+  font-size: 12px; cursor: pointer;
+  box-shadow: -6px 0 6px -4px var(--surface-2);
+}
+.wb-tab-lock:hover { background: var(--surface-3); color: var(--ink); }
+.wb-tab-lock.active {
+  background: var(--accent-soft); border-color: #cfe2f7;
+  color: var(--accent); font-weight: 600;
+}
 
 /* ---------------- buttons ---------------- */
 .wb-btn {
